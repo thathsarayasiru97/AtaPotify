@@ -104,7 +104,7 @@ fun ProfileEditorSheet(
     spotifyConnected: Boolean,
     spotifyName: String,
     isBusy: Boolean,
-    onSaveProfile: (String, String) -> Unit,
+    onSaveProfile: (String, String, String) -> Unit,
     onDisconnectSpotify: () -> Unit,
     onCheckForUpdates: () -> Unit,
     onSignOut: () -> Unit,
@@ -115,6 +115,9 @@ fun ProfileEditorSheet(
     }
     var phone by remember(profile, session) {
         mutableStateOf(profile?.phone ?: session.phone)
+    }
+    var spotifyEmail by remember(profile, session) {
+        mutableStateOf(profile?.spotifyEmail?.takeIf { it.isNotBlank() } ?: session.spotifyEmail)
     }
 
     ModalBottomSheet(
@@ -180,8 +183,20 @@ fun ProfileEditorSheet(
                     .testTag("profile_phone_input"),
             )
 
+            OutlinedTextField(
+                value = spotifyEmail,
+                onValueChange = { spotifyEmail = it.trim() },
+                label = { Text("Email Assigned to Spotify") },
+                supportingText = { Text("Shared with the plan Admin for Spotify Family & leaderboard access.") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("profile_spotify_email_input"),
+            )
+
             Button(
-                onClick = { onSaveProfile(displayName, phone) },
+                onClick = { onSaveProfile(displayName, phone, spotifyEmail) },
                 enabled = !isBusy && displayName.isNotBlank(),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -627,12 +642,13 @@ fun StartNewMonthDialog(
 fun WhitelistMemberDialog(
     editingMember: WhitelistMember?,
     isBusy: Boolean,
-    onSave: (email: String, name: String, phone: String, active: Boolean) -> Unit,
+    onSave: (email: String, name: String, phone: String, spotifyEmail: String, active: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var email by remember(editingMember) { mutableStateOf(editingMember?.email.orEmpty()) }
     var name by remember(editingMember) { mutableStateOf(editingMember?.displayName.orEmpty()) }
     var phone by remember(editingMember) { mutableStateOf(editingMember?.phone.orEmpty()) }
+    var spotifyEmail by remember(editingMember) { mutableStateOf(editingMember?.spotifyEmail.orEmpty()) }
     var active by remember(editingMember) { mutableStateOf(editingMember?.active ?: true) }
 
     AlertDialog(
@@ -667,6 +683,14 @@ fun WhitelistMemberDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     modifier = Modifier.fillMaxWidth().testTag("whitelist_phone_input"),
                 )
+                OutlinedTextField(
+                    value = spotifyEmail,
+                    onValueChange = { spotifyEmail = it.trim() },
+                    label = { Text("Spotify Account Email (optional)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    modifier = Modifier.fillMaxWidth().testTag("whitelist_spotify_email_input"),
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -686,7 +710,7 @@ fun WhitelistMemberDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onSave(email, name, phone, active) },
+                onClick = { onSave(email, name, phone, spotifyEmail, active) },
                 enabled = !isBusy && name.isNotBlank() && email.contains("@"),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SpotifyEmerald,
@@ -1190,4 +1214,200 @@ fun AppUpdateAvailableDialog(
         },
     )
 }
+
+@Composable
+fun SpotifyEmailOnboardingDialog(
+    googleEmail: String,
+    isBusy: Boolean,
+    onSave: (String) -> Unit,
+    onSkip: () -> Unit,
+) {
+    var spotifyEmail by remember(googleEmail) { mutableStateOf(googleEmail) }
+
+    AlertDialog(
+        onDismissRequest = onSkip,
+        containerColor = SurfaceDark,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.GraphicEq,
+                    contentDescription = null,
+                    tint = SpotifyEmerald,
+                )
+                Text("Your Spotify Email")
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Welcome to AtaPotify! Please enter the email address assigned to your Spotify account. This will be reported to the Admin panel so your account can be linked to the Spotify Family Plan & Leaderboard.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+                FilterChip(
+                    selected = spotifyEmail.equals(googleEmail, ignoreCase = true),
+                    onClick = { spotifyEmail = googleEmail },
+                    label = { Text("Same as Google ($googleEmail)") },
+                    modifier = Modifier.testTag("spotify_email_same_as_google_chip"),
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = SurfaceElevated,
+                        labelColor = TextSecondary,
+                        selectedContainerColor = EmeraldContainer,
+                        selectedLabelColor = SpotifyEmerald,
+                    ),
+                )
+                OutlinedTextField(
+                    value = spotifyEmail,
+                    onValueChange = { spotifyEmail = it.trim() },
+                    label = { Text("Email Assigned to Spotify") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("onboarding_spotify_email_input"),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(spotifyEmail) },
+                enabled = !isBusy && spotifyEmail.contains("@") && spotifyEmail.length >= 3,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("onboarding_spotify_email_save_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SpotifyEmerald,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Text("Submit to Admin")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onSkip,
+                enabled = !isBusy,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("onboarding_spotify_email_skip_button"),
+            ) {
+                Text("Later", color = TextSecondary)
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun AdvancePaymentDialog(
+    member: MemberPaymentStatus,
+    startMonth: PaymentMonth,
+    isBusy: Boolean,
+    onConfirmAdvance: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val monthOptions = listOf(2, 3, 6, 12)
+    var selectedMonths by remember { mutableStateOf(3) }
+    val targetMonthIds = remember(startMonth.monthId, selectedMonths) {
+        AtaPotifyConstants.consecutiveMonthIds(startMonth.monthId, selectedMonths)
+    }
+    val totalLkr = member.amountLkr * selectedMonths
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceDark,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = SpotifyEmerald,
+                )
+                Text("Multi-Month Advance Pay")
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Mark ${member.displayName} as Paid starting from ${startMonth.displayLabel} across consecutive future months (future months will be auto-created if needed).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    monthOptions.forEach { count ->
+                        val selected = selectedMonths == count
+                        FilterChip(
+                            selected = selected,
+                            onClick = { selectedMonths = count },
+                            label = { Text("$count Months") },
+                            modifier = Modifier.testTag("advance_months_chip_$count"),
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = SurfaceElevated,
+                                labelColor = TextSecondary,
+                                selectedContainerColor = EmeraldContainer,
+                                selectedLabelColor = SpotifyEmerald,
+                            ),
+                        )
+                    }
+                }
+                Surface(
+                    color = SurfaceElevated,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, BorderSubtle),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "Coverage: ${targetMonthIds.first()} → ${targetMonthIds.last()}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = SpotifyEmerald,
+                        )
+                        Text(
+                            text = "Total Share Covered: LKR $totalLkr ($selectedMonths × LKR ${member.amountLkr})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirmAdvance(selectedMonths) },
+                enabled = !isBusy,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("confirm_advance_pay_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SpotifyEmerald,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Text("Confirm $selectedMonths Months Paid")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.minimumInteractiveComponentSize(),
+            ) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+    )
+}
+
 

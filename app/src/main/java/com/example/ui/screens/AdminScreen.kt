@@ -19,8 +19,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Save
@@ -45,12 +48,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.PaymentMonth
 import com.example.data.model.PlanConfig
 import com.example.data.model.WhitelistMember
+import com.example.ui.theme.AmberContainer
+import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.CoralContainer
 import com.example.ui.theme.CoralPending
@@ -69,6 +75,8 @@ fun AdminScreen(
     whitelist: List<WhitelistMember>,
     isBusy: Boolean,
     onSaveLkrRate: (Long, Boolean) -> Unit,
+    onSaveBankDetails: (bankName: String, accountNumber: String, accountHolder: String, branch: String) -> Unit = { _, _, _, _ -> },
+    onCopyText: (label: String, text: String) -> Unit = { _, _ -> },
     onAddMemberClick: () -> Unit,
     onEditMemberClick: (WhitelistMember) -> Unit,
     onToggleMemberActive: (WhitelistMember, Boolean) -> Unit,
@@ -78,6 +86,11 @@ fun AdminScreen(
         mutableStateOf(planConfig.monthlyAmountLkr.toString())
     }
     var alsoUpdateActive by remember { mutableStateOf(true) }
+
+    var bankName by remember(planConfig.bankName) { mutableStateOf(planConfig.bankName) }
+    var bankAccountNumber by remember(planConfig.bankAccountNumber) { mutableStateOf(planConfig.bankAccountNumber) }
+    var bankAccountHolder by remember(planConfig.bankAccountHolder) { mutableStateOf(planConfig.bankAccountHolder) }
+    var bankBranch by remember(planConfig.bankBranch) { mutableStateOf(planConfig.bankBranch) }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -98,7 +111,7 @@ fun AdminScreen(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        text = "Manage the fixed monthly LKR split and whitelisted Google accounts.",
+                        text = "Manage the fixed monthly LKR split, bank transfer details, and whitelisted friends.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                     )
@@ -185,16 +198,136 @@ fun AdminScreen(
             }
 
             item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    border = BorderStroke(1.dp, BorderSubtle),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AccountBalance,
+                                contentDescription = null,
+                                tint = SpotifyEmerald,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Column {
+                                Text(
+                                    text = "Bank Transfer Details (for Friends)",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = "Shown on the Board with a 1-tap Copy button for friends to pay their share.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextSecondary,
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedTextField(
+                                value = bankName,
+                                onValueChange = { bankName = it },
+                                label = { Text("Bank Name (e.g. Commercial Bank)") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("admin_bank_name_input"),
+                            )
+                            OutlinedTextField(
+                                value = bankBranch,
+                                onValueChange = { bankBranch = it },
+                                label = { Text("Branch") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .weight(0.8f)
+                                    .testTag("admin_bank_branch_input"),
+                            )
+                        }
+
+                        OutlinedTextField(
+                            value = bankAccountNumber,
+                            onValueChange = { bankAccountNumber = it },
+                            label = { Text("Account Number") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_bank_account_input"),
+                        )
+
+                        OutlinedTextField(
+                            value = bankAccountHolder,
+                            onValueChange = { bankAccountHolder = it },
+                            label = { Text("Account Holder Name") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_bank_holder_input"),
+                        )
+
+                        Button(
+                            onClick = {
+                                onSaveBankDetails(
+                                    bankName,
+                                    bankAccountNumber,
+                                    bankAccountHolder,
+                                    bankBranch,
+                                )
+                            },
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .minimumInteractiveComponentSize()
+                                .testTag("save_bank_details_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SpotifyEmerald,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Save,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Save Bank Details")
+                        }
+                    }
+                }
+            }
+
+            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "Whitelisted Friends (${whitelist.size})",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
-                    )
+                    Column {
+                        Text(
+                            text = "Whitelisted Friends (${whitelist.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                        )
+                        val reportedCount = whitelist.count { it.spotifyEmail.isNotBlank() }
+                        Text(
+                            text = "$reportedCount of ${whitelist.size} Spotify email(s) reported",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                        )
+                    }
                     Button(
                         onClick = onAddMemberClick,
                         modifier = Modifier
@@ -250,6 +383,11 @@ fun AdminScreen(
                     WhitelistRosterCard(
                         member = member,
                         isBusy = isBusy,
+                        onCopySpotifyEmail = {
+                            if (member.spotifyEmail.isNotBlank()) {
+                                onCopyText("Spotify Email", member.spotifyEmail)
+                            }
+                        },
                         onEdit = { onEditMemberClick(member) },
                         onToggleActive = { active -> onToggleMemberActive(member, active) },
                         onRemove = { onRemoveMemberClick(member) },
@@ -266,6 +404,7 @@ fun AdminScreen(
 private fun WhitelistRosterCard(
     member: WhitelistMember,
     isBusy: Boolean,
+    onCopySpotifyEmail: () -> Unit,
     onEdit: () -> Unit,
     onToggleActive: (Boolean) -> Unit,
     onRemove: () -> Unit,
@@ -309,7 +448,7 @@ private fun WhitelistRosterCard(
                         }
                     }
                     Text(
-                        text = member.email,
+                        text = "Google: ${member.email}",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                     )
@@ -367,6 +506,63 @@ private fun WhitelistRosterCard(
                     }
                 }
             }
+
+            // Reported Spotify Email Banner
+            Surface(
+                color = if (member.spotifyEmail.isNotBlank()) EmeraldContainer.copy(alpha = 0.55f) else AmberContainer.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (member.spotifyEmail.isNotBlank()) SpotifyEmerald.copy(alpha = 0.35f) else AmberWarning.copy(alpha = 0.3f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = null,
+                            tint = if (member.spotifyEmail.isNotBlank()) SpotifyEmerald else AmberWarning,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Text(
+                            text = if (member.spotifyEmail.isNotBlank()) {
+                                "Spotify: ${member.spotifyEmail}"
+                            } else {
+                                "Spotify email: Awaiting member login"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (member.spotifyEmail.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (member.spotifyEmail.isNotBlank()) SpotifyEmerald else AmberWarning,
+                        )
+                    }
+                    if (member.spotifyEmail.isNotBlank()) {
+                        IconButton(
+                            onClick = onCopySpotifyEmail,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .testTag("copy_spotify_email_${member.memberKey}"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy Spotify email for ${member.displayName}",
+                                tint = SpotifyEmerald,
+                                modifier = Modifier.size(15.dp),
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
+

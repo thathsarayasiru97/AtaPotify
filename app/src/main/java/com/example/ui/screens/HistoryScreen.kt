@@ -1,9 +1,12 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,11 +20,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -29,16 +35,24 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.model.AllTimeWrappedSummary
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
@@ -49,8 +63,11 @@ import com.example.data.repository.AccessResolution
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.CoralPending
 import com.example.ui.theme.EmeraldContainer
+import com.example.ui.theme.EmeraldSoftText
+import com.example.ui.theme.MonoNumericLarge
 import com.example.ui.theme.SpotifyEmerald
 import com.example.ui.theme.SurfaceDark
+import com.example.ui.theme.SurfaceElevated
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
 
@@ -63,12 +80,15 @@ fun HistoryScreen(
     members: List<MemberPaymentStatus>,
     stats: List<ListeningStat>,
     whitelist: List<WhitelistMember>,
+    allTimeWrapped: AllTimeWrappedSummary? = null,
     isBusy: Boolean,
     onSelectMonth: (String) -> Unit,
     onOpenAddMemberToMonth: (PaymentMonth) -> Unit,
     onDeleteMonth: (PaymentMonth) -> Unit,
+    onShareMonthSummary: (PaymentMonth) -> Unit = {},
     onViewSlip: (MemberPaymentStatus) -> Unit,
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
+    onAdvancePayClick: (MemberPaymentStatus) -> Unit = {},
     onRewindPaid: (MemberPaymentStatus) -> Unit,
     onQuickStatusOverride: (MemberPaymentStatus, String) -> Unit = { _, _ -> },
     onEditPayment: (MemberPaymentStatus) -> Unit,
@@ -107,10 +127,16 @@ fun HistoryScreen(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        text = "Inspect past months, edit payment logs, and check the Spotify Leaderboard.",
+                        text = "Inspect past months, view All-Time Wrapped stats, and manage monthly billing summaries.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                     )
+                }
+            }
+
+            if (allTimeWrapped != null) {
+                item {
+                    AllTimeWrappedCard(summary = allTimeWrapped)
                 }
             }
 
@@ -187,12 +213,31 @@ fun HistoryScreen(
                         )
                     }
 
-                    if (session.isAdmin) {
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { onShareMonthSummary(selectedMonth) },
+                                enabled = !isBusy,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("history_share_summary_button"),
+                                border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.45f)),
+                                shape = RoundedCornerShape(10.dp),
                             ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = stringResource(R.string.cd_share_summary),
+                                    tint = SpotifyEmerald,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.btn_share_summary), color = SpotifyEmerald)
+                            }
+                            if (session.isAdmin) {
                                 OutlinedButton(
                                     onClick = { onOpenAddMemberToMonth(selectedMonth) },
                                     enabled = !isBusy,
@@ -216,20 +261,18 @@ fun HistoryScreen(
                                     onClick = { onDeleteMonth(selectedMonth) },
                                     enabled = !isBusy,
                                     modifier = Modifier
-                                        .weight(1f)
                                         .minimumInteractiveComponentSize()
                                         .testTag("history_delete_month_button"),
                                     border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.45f)),
                                     shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.DeleteOutline,
-                                        contentDescription = null,
+                                        contentDescription = stringResource(R.string.btn_delete_month),
                                         tint = CoralPending,
                                         modifier = Modifier.size(16.dp),
                                     )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(stringResource(R.string.btn_delete_month), color = CoralPending)
                                 }
                             }
                         }
@@ -247,6 +290,7 @@ fun HistoryScreen(
                             onUploadSlipClick = {},
                             onViewSlipClick = { onViewSlip(member) },
                             onMarkPaidClick = { onConfirmPaid(member) },
+                            onAdvancePayClick = { onAdvancePayClick(member) },
                             onRewindPaidClick = { onRewindPaid(member) },
                             onEditPaymentClick = { onEditPayment(member) },
                             onDeletePaymentClick = { onDeletePayment(member) },
@@ -283,4 +327,165 @@ fun HistoryScreen(
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
+    val totalHours = remember(summary.totalGroupMinutes) {
+        String.format(java.util.Locale.US, "%.1f", summary.totalGroupMinutes / 60.0)
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("all_time_wrapped_card"),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.45f)),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(Color(0xFF133822), SurfaceDark),
+                    )
+                )
+                .padding(18.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(EmeraldContainer),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = SpotifyEmerald,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = stringResource(R.string.title_wrapped_summary),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = "Across ${summary.monthsTracked} synced billing month(s)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = EmeraldSoftText,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Surface(
+                        modifier = Modifier.weight(1f),
+                        color = SurfaceElevated,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, BorderSubtle),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = "Total Group Listening",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                            )
+                            Text(
+                                text = "${summary.totalGroupMinutes} min",
+                                style = MonoNumericLarge.copy(fontSize = 17.sp),
+                                color = SpotifyEmerald,
+                            )
+                            Text(
+                                text = "$totalHours hrs • ${summary.totalGroupTracks} tracks",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                            )
+                        }
+                    }
+
+                    summary.topListener?.let { top ->
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            color = SurfaceElevated,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, BorderSubtle),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = "#1 Top Listener",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary,
+                                )
+                                Text(
+                                    text = top.displayName,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = buildString {
+                                        append("${top.totalMinutes} min")
+                                        top.lkrPerHour?.let { append(" • LKR $it/hr") }
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SpotifyEmerald,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (summary.topArtists.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        summary.topArtists.forEach { artist ->
+                            Surface(
+                                color = EmeraldContainer,
+                                shape = RoundedCornerShape(999.dp),
+                            ) {
+                                Text(
+                                    text = "Top Artist: $artist",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SpotifyEmerald,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 

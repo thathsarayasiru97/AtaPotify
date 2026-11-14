@@ -56,6 +56,14 @@
     <string name="cd_quick_mark_pending">Mark %1$s as Pending</string>
     <string name="btn_check_updates">Check for Updates</string>
     <string name="btn_download_update">Download Update</string>
+    <string name="btn_share_summary">Share Summary</string>
+    <string name="cd_share_summary">Share monthly summary to WhatsApp</string>
+    <string name="btn_advance_pay">Advance Pay</string>
+    <string name="cd_more_admin_actions">More admin actions</string>
+    <string name="cd_copy_text">Copy to clipboard</string>
+    <string name="title_bank_details">Bank Transfer Details</string>
+    <string name="title_wrapped_summary">All-Time AtaPotify Wrapped</string>
 </resources>
+
 
 

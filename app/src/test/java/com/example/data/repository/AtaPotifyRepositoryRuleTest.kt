@@ -77,12 +77,21 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
         assertTrue(friendAccess is AccessResolution.Authorized && !friendAccess.isAdmin)
 
+        step("friend saveOwnSpotifyEmail") {
+            authRepo.saveOwnSpotifyEmail(
+                emailLower = friendEmail,
+                isAdmin = false,
+                spotifyEmail = "kasun.music@gmail.com",
+            ).getOrThrow()
+        }
+
         step("friend updateOwnProfile") {
             authRepo.updateOwnProfile(
                 emailLower = friendEmail,
                 isAdmin = false,
                 newDisplayName = "Kasun Perera",
                 newPhone = "0779876543",
+                newSpotifyEmail = "kasun.spotify@gmail.com",
                 monthIdsToSync = listOf(monthId),
             ).getOrThrow()
         }

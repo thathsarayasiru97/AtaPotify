@@ -63,6 +63,22 @@ object AtaPotifyConstants {
         }.getOrDefault(current)
     }
 
+    fun consecutiveMonthIds(startMonthId: String, count: Int): List<String> {
+        val safeCount = count.coerceIn(1, 12)
+        return runCatching {
+            val parser = SimpleDateFormat("yyyy-MM", Locale.US)
+            val startDate = parser.parse(startMonthId) ?: return listOf(startMonthId)
+            val cal = Calendar.getInstance()
+            buildList {
+                for (offset in 0 until safeCount) {
+                    cal.time = startDate
+                    cal.add(Calendar.MONTH, offset)
+                    add(parser.format(cal.time))
+                }
+            }
+        }.getOrDefault(listOf(startMonthId))
+    }
+
     fun sanitizeWhatsAppDigits(phone: String): String {
         val digits = phone.filter { it.isDigit() }
         return when {
@@ -80,6 +96,7 @@ data class UserProfile(
     val displayName: String = "",
     val role: String = AtaPotifyConstants.ROLE_MEMBER,
     val phone: String = "",
+    val spotifyEmail: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 )
@@ -91,8 +108,22 @@ data class PlanConfig(
     val monthlyAmountLkr: Long = AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
     val currency: String = AtaPotifyConstants.CURRENCY_LKR,
     val allowedEmails: List<String> = emptyList(),
+    val bankName: String = "",
+    val bankAccountNumber: String = "",
+    val bankAccountHolder: String = "",
+    val bankBranch: String = "",
     @ServerTimestamp val updatedAt: Timestamp? = null,
-)
+) {
+    val hasBankDetails: Boolean
+        get() = bankAccountNumber.isNotBlank() || bankName.isNotBlank()
+
+    fun formattedBankCopyText(): String = buildString {
+        if (bankName.isNotBlank()) appendLine("Bank: $bankName")
+        if (bankBranch.isNotBlank()) appendLine("Branch: $bankBranch")
+        if (bankAccountNumber.isNotBlank()) appendLine("Account No: $bankAccountNumber")
+        if (bankAccountHolder.isNotBlank()) appendLine("Account Name: $bankAccountHolder")
+    }.trim()
+}
 
 @IgnoreExtraProperties
 data class WhitelistMember(
@@ -101,6 +132,7 @@ data class WhitelistMember(
     val email: String = "",
     val displayName: String = "",
     val phone: String = "",
+    val spotifyEmail: String = "",
     val role: String = AtaPotifyConstants.ROLE_MEMBER,
     val active: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -238,4 +270,140 @@ fun calculateMonthlyBillingSummary(members: List<MemberPaymentStatus>): MonthlyB
         collectionFraction = fraction,
     )
 }
+
+data class AllTimeMemberStanding(
+    val memberKey: String,
+    val displayName: String,
+    val totalMinutes: Long,
+    val totalTracks: Long,
+    val totalLkrAllocated: Long,
+    val favoriteArtist: String,
+) {
+    val lkrPerHour: Int?
+        get() {
+            val hours = totalMinutes / 60.0
+            return if (hours >= 0.1 && totalLkrAllocated > 0L) (totalLkrAllocated / hours).toInt() else null
+        }
+}
+
+data class AllTimeWrappedSummary(
+    val monthsTracked: Int,
+    val totalGroupMinutes: Long,
+    val totalGroupTracks: Long,
+    val topListener: AllTimeMemberStanding?,
+    val bestValueMember: AllTimeMemberStanding?,
+    val topArtists: List<String>,
+    val standings: List<AllTimeMemberStanding>,
+)
+
+fun calculateAllTimeWrappedSummary(
+    allStatsByMonth: Map<String, List<ListeningStat>>,
+    monthAmountByMonth: Map<String, Long>,
+): AllTimeWrappedSummary? {
+    val nonEmptyMonths = allStatsByMonth.filterValues { stats ->
+        stats.any { it.minutesListened > 0L || it.tracksCounted > 0L }
+    }
+    if (nonEmptyMonths.isEmpty()) return null
+
+    data class Accumulator(
+        var displayName: String = "",
+        var minutes: Long = 0L,
+        var tracks: Long = 0L,
+        var totalLkr: Long = 0L,
+        val artistCounts: MutableMap<String, Int> = mutableMapOf(),
+    )
+
+    val byMember = mutableMapOf<String, Accumulator>()
+    val globalArtists = mutableMapOf<String, Int>()
+
+    for ((monthId, stats) in nonEmptyMonths) {
+        val monthRate = monthAmountByMonth[monthId] ?: AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR
+        for (stat in stats) {
+            if (stat.minutesListened <= 0L && stat.tracksCounted <= 0L) continue
+            val acc = byMember.getOrPut(stat.memberKey) { Accumulator(displayName = stat.displayName) }
+            if (stat.displayName.isNotBlank()) acc.displayName = stat.displayName
+            acc.minutes += stat.minutesListened
+            acc.tracks += stat.tracksCounted
+            acc.totalLkr += monthRate
+            if (stat.topArtist.isNotBlank()) {
+                acc.artistCounts[stat.topArtist] = (acc.artistCounts[stat.topArtist] ?: 0) + 1
+                globalArtists[stat.topArtist] = (globalArtists[stat.topArtist] ?: 0) + 1
+            }
+        }
+    }
+
+    val standings = byMember.map { (key, acc) ->
+        AllTimeMemberStanding(
+            memberKey = key,
+            displayName = acc.displayName.ifBlank { "Member" },
+            totalMinutes = acc.minutes,
+            totalTracks = acc.tracks,
+            totalLkrAllocated = acc.totalLkr,
+            favoriteArtist = acc.artistCounts.maxByOrNull { it.value }?.key.orEmpty(),
+        )
+    }.sortedByDescending { it.totalMinutes }
+
+    if (standings.isEmpty()) return null
+
+    val topListener = standings.firstOrNull { it.totalMinutes > 0L }
+    val bestValue = standings
+        .filter { it.lkrPerHour != null }
+        .minByOrNull { it.lkrPerHour ?: Int.MAX_VALUE }
+    val topArtists = globalArtists.entries
+        .sortedByDescending { it.value }
+        .map { it.key }
+        .take(4)
+
+    return AllTimeWrappedSummary(
+        monthsTracked = nonEmptyMonths.size,
+        totalGroupMinutes = standings.sumOf { it.totalMinutes },
+        totalGroupTracks = standings.sumOf { it.totalTracks },
+        topListener = topListener,
+        bestValueMember = bestValue,
+        topArtists = topArtists,
+        standings = standings,
+    )
+}
+
+fun buildWhatsAppMonthlySummaryText(
+    month: PaymentMonth,
+    members: List<MemberPaymentStatus>,
+    stats: List<ListeningStat>,
+    planConfig: PlanConfig,
+): String {
+    val summary = calculateMonthlyBillingSummary(members)
+    return buildString {
+        appendLine("*AtaPotify — ${month.displayLabel}*")
+        appendLine("Share: LKR ${month.amountLkr} • Collected: LKR ${summary.collectedLkr}/${summary.expectedTotalLkr} (${summary.paidCount}/${summary.totalCount} Paid)")
+        appendLine()
+        if (members.isNotEmpty()) {
+            appendLine("*Payment Status:*")
+            members.forEach { m ->
+                val badge = when (m.status) {
+                    AtaPotifyConstants.STATUS_PAID -> "[PAID]"
+                    AtaPotifyConstants.STATUS_VERIFYING -> "[VERIFYING]"
+                    else -> "[PENDING]"
+                }
+                appendLine("• ${m.displayName}: $badge (LKR ${m.amountLkr})")
+            }
+        }
+        val activeStats = stats.filter { it.minutesListened > 0L }.sortedByDescending { it.minutesListened }
+        if (activeStats.isNotEmpty()) {
+            appendLine()
+            appendLine("*Spotify Value Leaderboard:*")
+            activeStats.take(5).forEachIndexed { idx, s ->
+                val hrs = s.minutesListened / 60.0
+                val rate = if (hrs >= 0.1) " (LKR ${(month.amountLkr / hrs).toInt()}/hr)" else ""
+                val artist = if (s.topArtist.isNotBlank()) " • ${s.topArtist}" else ""
+                appendLine("#${idx + 1} ${s.displayName}: ${s.minutesListened} min$rate$artist")
+            }
+        }
+        if (planConfig.hasBankDetails && summary.pendingCount > 0) {
+            appendLine()
+            appendLine("*Bank Transfer Details:*")
+            appendLine(planConfig.formattedBankCopyText())
+        }
+    }.trim()
+}
+
 

@@ -27,28 +27,36 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AddCircleOutline
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Leaderboard
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -62,6 +70,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,6 +92,7 @@ import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
 import com.example.data.model.MonthlyBillingSummary
 import com.example.data.model.PaymentMonth
+import com.example.data.model.PlanConfig
 import com.example.data.model.WhitelistMember
 import com.example.data.model.calculateMonthlyBillingSummary
 import com.example.data.repository.AccessResolution
@@ -120,6 +130,7 @@ fun BoardScreen(
     whitelist: List<WhitelistMember>,
     overdueReminders: List<OverdueReminderCandidate>,
     defaultAmountLkr: Long,
+    planConfig: PlanConfig = PlanConfig(),
     spotifyConnected: Boolean,
     spotifyName: String,
     isSpotifyClientConfigured: Boolean,
@@ -130,18 +141,20 @@ fun BoardScreen(
     onUploadSlip: (android.net.Uri, MemberPaymentStatus) -> Unit,
     onViewSlip: (MemberPaymentStatus) -> Unit,
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
+    onAdvancePayClick: (MemberPaymentStatus) -> Unit = {},
     onRewindPaid: (MemberPaymentStatus) -> Unit,
-    onQuickStatusOverride: (MemberPaymentStatus, String) -> Unit = { _, _ -> },
     onEditPayment: (MemberPaymentStatus) -> Unit,
     onDeletePayment: (MemberPaymentStatus) -> Unit,
     onRemindMember: (MemberPaymentStatus, String) -> Unit,
+    onCopyText: (String, String) -> Unit = { _, _ -> },
+    onShareMonthlySummary: () -> Unit = {},
     onOpenOverdueQueue: () -> Unit,
     onConnectSpotify: () -> Unit,
     onSyncSpotify: () -> Unit,
     onShowSpotifySetupHint: () -> Unit,
 ) {
     var selectedSection by remember { mutableIntStateOf(0) } // 0 = Payments, 1 = Leaderboard
-    var pendingUploadTarget by remember { androidx.compose.runtime.mutableStateOf<MemberPaymentStatus?>(null) }
+    var pendingUploadTarget by remember { mutableStateOf<MemberPaymentStatus?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -189,21 +202,8 @@ fun BoardScreen(
                     defaultAmountLkr = defaultAmountLkr,
                     isAdmin = session.isAdmin,
                     onStartNewMonth = onOpenStartMonth,
+                    onShareMonthlySummary = onShareMonthlySummary,
                 )
-            }
-
-            if (currentMonth != null) {
-                item {
-                    MonthlyBillingSummaryCard(
-                        month = currentMonth,
-                        members = members,
-                        summary = billingSummary,
-                        selfEmail = session.email,
-                        isAdmin = session.isAdmin,
-                        isBusy = isBusy,
-                        onQuickStatusOverride = onQuickStatusOverride,
-                    )
-                }
             }
 
             if (session.isAdmin && overdueReminders.isNotEmpty()) {
@@ -274,6 +274,15 @@ fun BoardScreen(
                     )
                 }
             } else if (selectedSection == 0) {
+                if (planConfig.hasBankDetails) {
+                    item {
+                        BankTransferDetailsCard(
+                            planConfig = planConfig,
+                            onCopyText = onCopyText,
+                        )
+                    }
+                }
+
                 if (session.isAdmin) {
                     item {
                         Row(
@@ -343,6 +352,7 @@ fun BoardScreen(
                         },
                         onViewSlipClick = { onViewSlip(member) },
                         onMarkPaidClick = { onConfirmPaid(member) },
+                        onAdvancePayClick = { onAdvancePayClick(member) },
                         onRewindPaidClick = { onRewindPaid(member) },
                         onEditPaymentClick = { onEditPayment(member) },
                         onDeletePaymentClick = { onDeletePayment(member) },
@@ -393,6 +403,7 @@ private fun MonthHeroCard(
     defaultAmountLkr: Long,
     isAdmin: Boolean,
     onStartNewMonth: () -> Unit,
+    onShareMonthlySummary: () -> Unit,
 ) {
     val amountLkr = month?.amountLkr ?: defaultAmountLkr
 
@@ -490,29 +501,186 @@ private fun MonthHeroCard(
                     }
                 }
 
-                if (isAdmin) {
-                    Button(
-                        onClick = onStartNewMonth,
+                if (isAdmin || month != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (isAdmin) {
+                            Button(
+                                onClick = onStartNewMonth,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("start_new_month_button"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = SpotifyEmerald,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                ),
+                                shape = RoundedCornerShape(14.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AddCircleOutline,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = stringResource(R.string.btn_start_new_month),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            }
+                        }
+                        if (month != null) {
+                            OutlinedButton(
+                                onClick = onShareMonthlySummary,
+                                modifier = Modifier
+                                    .then(if (isAdmin) Modifier else Modifier.fillMaxWidth())
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("share_monthly_summary_button"),
+                                border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.5f)),
+                                shape = RoundedCornerShape(14.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = stringResource(R.string.cd_share_summary),
+                                    tint = SpotifyEmerald,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.btn_share_summary),
+                                    color = SpotifyEmerald,
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BankTransferDetailsCard(
+    planConfig: PlanConfig,
+    onCopyText: (String, String) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("bank_transfer_details_card"),
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+        border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.35f)),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .minimumInteractiveComponentSize()
-                            .testTag("start_new_month_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SpotifyEmerald,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                        ),
-                        shape = RoundedCornerShape(14.dp),
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(EmeraldContainer),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = Icons.Default.AddCircleOutline,
+                            imageVector = Icons.Default.AccountBalance,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
+                            tint = SpotifyEmerald,
+                            modifier = Modifier.size(17.dp),
                         )
-                        Spacer(Modifier.width(8.dp))
+                    }
+                    Column {
                         Text(
-                            text = stringResource(R.string.btn_start_new_month),
-                            style = MaterialTheme.typography.labelLarge,
+                            text = stringResource(R.string.title_bank_details),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
+                        val bankLine = listOf(planConfig.bankName, planConfig.bankBranch)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" • ")
+                        if (bankLine.isNotBlank()) {
+                            Text(
+                                text = bankLine,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                            )
+                        }
+                    }
+                }
+
+                if (planConfig.bankAccountNumber.isNotBlank()) {
+                    FilledTonalButton(
+                        onClick = { onCopyText("Account Number", planConfig.bankAccountNumber) },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("copy_bank_account_button"),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = EmeraldContainer,
+                            contentColor = SpotifyEmerald,
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = stringResource(R.string.cd_copy_text),
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Copy Acc No.")
+                    }
+                }
+            }
+
+            Surface(
+                color = SurfaceElevated,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, BorderSubtle),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        if (planConfig.bankAccountNumber.isNotBlank()) {
+                            Text(
+                                text = planConfig.bankAccountNumber,
+                                style = MonoNumericLarge.copy(fontSize = 16.sp),
+                                color = SpotifyEmerald,
+                            )
+                        }
+                        if (planConfig.bankAccountHolder.isNotBlank()) {
+                            Text(
+                                text = "Holder: ${planConfig.bankAccountHolder}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                            )
+                        }
+                    }
+                    TextButton(
+                        onClick = { onCopyText("Bank Details", planConfig.formattedBankCopyText()) },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("copy_all_bank_details_button"),
+                    ) {
+                        Text("Copy All", color = SpotifyEmerald)
                     }
                 }
             }
@@ -1037,6 +1205,7 @@ fun MemberPaymentCard(
     onUploadSlipClick: () -> Unit,
     onViewSlipClick: () -> Unit,
     onMarkPaidClick: () -> Unit,
+    onAdvancePayClick: () -> Unit = {},
     onRewindPaidClick: () -> Unit = {},
     onEditPaymentClick: () -> Unit = {},
     onDeletePaymentClick: () -> Unit = {},
@@ -1044,6 +1213,7 @@ fun MemberPaymentCard(
 ) {
     val ageDays = member.pendingAgeDays()
     val isOverdue = member.status == AtaPotifyConstants.STATUS_PENDING && ageDays >= AtaPotifyConstants.OVERDUE_DAYS_THRESHOLD
+    var showAdminMenu by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier
@@ -1159,212 +1329,223 @@ fun MemberPaymentCard(
                 }
 
                 StatusPill(status = member.status)
+
+                if (isAdmin) {
+                    Box {
+                        IconButton(
+                            onClick = { showAdminMenu = true },
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("member_overflow_${member.memberKey}"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = stringResource(R.string.cd_more_admin_actions),
+                                tint = TextSecondary,
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showAdminMenu,
+                            onDismissRequest = { showAdminMenu = false },
+                            containerColor = SurfaceElevated,
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Advance Pay (Multi-Month)") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.CalendarMonth,
+                                        contentDescription = null,
+                                        tint = SpotifyEmerald,
+                                    )
+                                },
+                                onClick = {
+                                    showAdminMenu = false
+                                    onAdvancePayClick()
+                                },
+                                modifier = Modifier.testTag("advance_pay_${member.memberKey}"),
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.btn_edit_payment)) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = null,
+                                        tint = TextSecondary,
+                                    )
+                                },
+                                onClick = {
+                                    showAdminMenu = false
+                                    onEditPaymentClick()
+                                },
+                                modifier = Modifier.testTag("edit_payment_${member.memberKey}"),
+                            )
+                            if (member.status == AtaPotifyConstants.STATUS_PAID) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.btn_rewind_paid), color = AmberWarning) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Undo,
+                                            contentDescription = null,
+                                            tint = AmberWarning,
+                                        )
+                                    },
+                                    onClick = {
+                                        showAdminMenu = false
+                                        onRewindPaidClick()
+                                    },
+                                    modifier = Modifier.testTag("rewind_paid_${member.memberKey}"),
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.btn_remove_payment), color = CoralPending) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteOutline,
+                                        contentDescription = null,
+                                        tint = CoralPending,
+                                    )
+                                },
+                                onClick = {
+                                    showAdminMenu = false
+                                    onDeletePaymentClick()
+                                },
+                                modifier = Modifier.testTag("delete_payment_${member.memberKey}"),
+                            )
+                        }
+                    }
+                }
             }
 
-            // Action rows for Self or Admin
-            AnimatedVisibility(
-                visible = (isSelf && member.status != AtaPotifyConstants.STATUS_PAID) || isAdmin || (isSelf && member.hasReceipt),
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val hasPrimaryRow = (isSelf && member.status != AtaPotifyConstants.STATUS_PAID) ||
-                        ((isSelf || isAdmin) && member.hasReceipt) ||
-                        (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID) ||
-                        (isAdmin && member.status == AtaPotifyConstants.STATUS_PAID)
+            // Primary action row for Self or Admin
+            val hasPrimaryRow = (isSelf && member.status != AtaPotifyConstants.STATUS_PAID) ||
+                ((isSelf || isAdmin) && member.hasReceipt) ||
+                (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID)
 
-                    if (hasPrimaryRow) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            AnimatedVisibility(visible = hasPrimaryRow) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (isSelf && member.status == AtaPotifyConstants.STATUS_PENDING) {
+                        Button(
+                            onClick = onUploadSlipClick,
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("upload_slip_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SpotifyEmerald,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
                         ) {
-                            if (isSelf && member.status == AtaPotifyConstants.STATUS_PENDING) {
-                                Button(
-                                    onClick = onUploadSlipClick,
-                                    enabled = !isBusy,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("upload_slip_button"),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = SpotifyEmerald,
-                                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                                    ),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.UploadFile,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(stringResource(R.string.btn_upload_slip))
-                                }
-                            }
-
-                            if (isSelf && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                                OutlinedButton(
-                                    onClick = onUploadSlipClick,
-                                    enabled = !isBusy,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("replace_slip_button"),
-                                    border = BorderStroke(1.dp, BorderSubtle),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Text(stringResource(R.string.btn_replace_slip))
-                                }
-                            }
-
-                            if ((isSelf || isAdmin) && member.hasReceipt) {
-                                FilledTonalButton(
-                                    onClick = onViewSlipClick,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("view_slip_${member.memberKey}"),
-                                    colors = ButtonDefaults.filledTonalButtonColors(
-                                        containerColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                                            AmberContainer
-                                        } else {
-                                            SurfaceHighest
-                                        },
-                                        contentColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                                            AmberWarning
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurface
-                                        },
-                                    ),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(17.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                                            stringResource(R.string.btn_review_slip)
-                                        } else {
-                                            stringResource(R.string.btn_view_slip)
-                                        }
-                                    )
-                                }
-                            }
-
-                            if (isAdmin && member.status == AtaPotifyConstants.STATUS_PENDING) {
-                                OutlinedButton(
-                                    onClick = onRemindClick,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("remind_${member.memberKey}"),
-                                    border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.5f)),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Send,
-                                        contentDescription = null,
-                                        tint = AmberWarning,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(stringResource(R.string.btn_remind), color = AmberWarning)
-                                }
-                            }
-
-                            if (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID) {
-                                FilledTonalButton(
-                                    onClick = onMarkPaidClick,
-                                    enabled = !isBusy,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("mark_paid_${member.memberKey}"),
-                                    colors = ButtonDefaults.filledTonalButtonColors(
-                                        containerColor = EmeraldContainer,
-                                        contentColor = SpotifyEmerald,
-                                    ),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(stringResource(R.string.btn_mark_paid))
-                                }
-                            }
-
-                            if (isAdmin && member.status == AtaPotifyConstants.STATUS_PAID) {
-                                OutlinedButton(
-                                    onClick = onRewindPaidClick,
-                                    enabled = !isBusy,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("rewind_paid_${member.memberKey}"),
-                                    border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.5f)),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Undo,
-                                        contentDescription = null,
-                                        tint = AmberWarning,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(stringResource(R.string.btn_rewind_paid), color = AmberWarning)
-                                }
-                            }
+                            Icon(
+                                imageVector = Icons.Default.UploadFile,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.btn_upload_slip))
                         }
                     }
 
-                    if (isAdmin) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    if (isSelf && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                        OutlinedButton(
+                            onClick = onUploadSlipClick,
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("replace_slip_button"),
+                            border = BorderStroke(1.dp, BorderSubtle),
+                            shape = RoundedCornerShape(12.dp),
                         ) {
-                            OutlinedButton(
-                                onClick = onEditPaymentClick,
-                                enabled = !isBusy,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("edit_payment_${member.memberKey}"),
-                                border = BorderStroke(1.dp, BorderSubtle),
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = stringResource(R.string.cd_edit_payment),
-                                    tint = TextSecondary,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(stringResource(R.string.btn_edit_payment), color = MaterialTheme.colorScheme.onSurface)
-                            }
+                            Text(stringResource(R.string.btn_replace_slip))
+                        }
+                    }
 
-                            OutlinedButton(
-                                onClick = onDeletePaymentClick,
-                                enabled = !isBusy,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .minimumInteractiveComponentSize()
-                                    .testTag("delete_payment_${member.memberKey}"),
-                                border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.45f)),
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DeleteOutline,
-                                    contentDescription = stringResource(R.string.cd_remove_payment),
-                                    tint = CoralPending,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(stringResource(R.string.btn_remove_payment), color = CoralPending)
-                            }
+                    if ((isSelf || isAdmin) && member.hasReceipt) {
+                        FilledTonalButton(
+                            onClick = onViewSlipClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("view_slip_${member.memberKey}"),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                                    AmberContainer
+                                } else {
+                                    SurfaceHighest
+                                },
+                                contentColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                                    AmberWarning
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
+                                contentDescription = null,
+                                modifier = Modifier.size(17.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                                    stringResource(R.string.btn_review_slip)
+                                } else {
+                                    stringResource(R.string.btn_view_slip)
+                                }
+                            )
+                        }
+                    }
+
+                    if (isAdmin && member.status == AtaPotifyConstants.STATUS_PENDING) {
+                        OutlinedButton(
+                            onClick = onRemindClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("remind_${member.memberKey}"),
+                            border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = null,
+                                tint = AmberWarning,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.btn_remind), color = AmberWarning)
+                        }
+                    }
+
+                    if (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID) {
+                        FilledTonalButton(
+                            onClick = onMarkPaidClick,
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("mark_paid_${member.memberKey}"),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = EmeraldContainer,
+                                contentColor = SpotifyEmerald,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.btn_mark_paid))
                         }
                     }
                 }

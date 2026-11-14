@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.error.unwrapFirestoreException
+import com.example.data.model.AllTimeWrappedSummary
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
@@ -15,6 +16,8 @@ import com.example.data.model.PlanConfig
 import com.example.data.model.ReceiptSlip
 import com.example.data.model.UserProfile
 import com.example.data.model.WhitelistMember
+import com.example.data.model.buildWhatsAppMonthlySummaryText
+import com.example.data.model.calculateAllTimeWrappedSummary
 import com.example.data.repository.AccessResolution
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.PaymentRepository
@@ -121,6 +124,10 @@ class AtaPotifyViewModel(
     private val _availableUpdate = MutableStateFlow<GitHubAppRelease?>(null)
     val availableUpdate: StateFlow<GitHubAppRelease?> = _availableUpdate.asStateFlow()
 
+    private val _spotifyEmailPromptDismissed = MutableStateFlow(false)
+    private val _allTimeWrapped = MutableStateFlow<AllTimeWrappedSummary?>(null)
+    val allTimeWrapped: StateFlow<AllTimeWrappedSummary?> = _allTimeWrapped.asStateFlow()
+
     private var hasAutoPromptedOverdueThisSession = false
     private var hasCheckedUpdateThisSession = false
     private val dismissedUpdateTags = mutableSetOf<String>()
@@ -144,6 +151,14 @@ class AtaPotifyViewModel(
             Log.w(TAG, "Error observing profile", fsErr ?: error)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
+
+    val needsSpotifyEmailPrompt: StateFlow<Boolean> = combine(
+        userProfile,
+        _spotifyEmailPromptDismissed,
+    ) { profile, dismissed ->
+        if (dismissed || profile == null) false
+        else profile.spotifyEmail.isBlank() && session.spotifyEmail.isBlank()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), false)
 
     val planConfig: StateFlow<PlanConfig> = paymentRepository.observePlanConfig()
         .catch { error ->
@@ -280,7 +295,56 @@ class AtaPotifyViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            combine(paymentMonths, currentMonthStats, historyMonthStats) { months, _, _ -> months }
+                .collect { months ->
+                    refreshAllTimeWrapped(months)
+                }
+        }
         checkForAppUpdate(manual = false)
+    }
+
+    private suspend fun refreshAllTimeWrapped(months: List<PaymentMonth>) {
+        if (months.isEmpty()) {
+            _allTimeWrapped.value = null
+            return
+        }
+        val statsByMonth = paymentRepository.fetchAllMonthsStats(
+            months = months,
+            userEmailLower = session.email,
+            isAdmin = session.isAdmin,
+        )
+        val amountByMonth = months.associate { it.monthId to it.amountLkr }
+        _allTimeWrapped.value = calculateAllTimeWrappedSummary(
+            allStatsByMonth = statsByMonth,
+            monthAmountByMonth = amountByMonth,
+        )
+    }
+
+    fun submitInitialSpotifyEmail(spotifyEmail: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = authRepository.saveOwnSpotifyEmail(
+                emailLower = session.email,
+                isAdmin = session.isAdmin,
+                spotifyEmail = spotifyEmail,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _spotifyEmailPromptDismissed.value = true
+                    _snackbarEvents.tryEmit("Spotify email saved and reported to Admin")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to save Spotify email")
+                },
+            )
+        }
+    }
+
+    fun dismissSpotifyEmailPromptForSession() {
+        _spotifyEmailPromptDismissed.value = true
     }
 
     fun checkForAppUpdate(manual: Boolean = false) {
@@ -347,7 +411,12 @@ class AtaPotifyViewModel(
         _showAutoReminderSheet.value = false
     }
 
-    fun updateOwnProfile(displayName: String, phone: String, onDone: () -> Unit) {
+    fun updateOwnProfile(
+        displayName: String,
+        phone: String,
+        spotifyEmail: String,
+        onDone: () -> Unit,
+    ) {
         viewModelScope.launch {
             _isBusy.value = true
             val monthIds = paymentMonths.value.take(3).map { it.monthId }
@@ -357,10 +426,14 @@ class AtaPotifyViewModel(
                 newDisplayName = displayName,
                 newPhone = phone,
                 monthIdsToSync = monthIds,
+                newSpotifyEmail = spotifyEmail,
             )
             _isBusy.value = false
             result.fold(
                 onSuccess = {
+                    if (spotifyEmail.isNotBlank()) {
+                        _spotifyEmailPromptDismissed.value = true
+                    }
                     _snackbarEvents.tryEmit("Profile updated")
                     onDone()
                 },
@@ -443,6 +516,35 @@ class AtaPotifyViewModel(
                 },
                 onFailure = { e ->
                     _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to confirm payment")
+                },
+            )
+        }
+    }
+
+    fun confirmAdvancePaymentMonths(
+        startMonth: PaymentMonth,
+        member: MemberPaymentStatus,
+        monthsCount: Int,
+        onDone: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.confirmAdvancePaymentMonths(
+                startMonth = startMonth,
+                member = member,
+                monthsCount = monthsCount,
+                activeWhitelist = whitelist.value,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = { monthIds ->
+                    _snackbarEvents.tryEmit(
+                        "Marked ${member.displayName} as Paid across ${monthIds.size} months (${monthIds.first()} → ${monthIds.last()})"
+                    )
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to record advance payment")
                 },
             )
         }
@@ -673,6 +775,33 @@ class AtaPotifyViewModel(
         }
     }
 
+    fun shareMonthlySummaryToWhatsApp(
+        context: Context,
+        month: PaymentMonth,
+        members: List<MemberPaymentStatus>,
+        stats: List<ListeningStat>,
+    ) {
+        val text = buildWhatsAppMonthlySummaryText(
+            month = month,
+            members = members,
+            stats = stats,
+            planConfig = planConfig.value,
+        )
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "AtaPotify — ${month.displayLabel}")
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        val chooser = Intent.createChooser(sendIntent, "Share ${month.displayLabel} Summary").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            context.startActivity(chooser)
+        }.onFailure {
+            _snackbarEvents.tryEmit("Unable to open share sheet")
+        }
+    }
+
     fun startNewMonth(monthId: String, displayLabel: String, amountLkr: Long, onDone: () -> Unit) {
         val activeMembers = whitelist.value.filter { it.active }
         if (activeMembers.isEmpty()) {
@@ -720,11 +849,36 @@ class AtaPotifyViewModel(
         }
     }
 
+    fun updateBankDetails(
+        bankName: String,
+        bankAccountNumber: String,
+        bankAccountHolder: String,
+        bankBranch: String,
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val emails = whitelist.value.filter { it.active }.map { AtaPotifyConstants.normalizeEmail(it.email) }
+            val res = paymentRepository.updateBankDetails(
+                bankName = bankName,
+                bankAccountNumber = bankAccountNumber,
+                bankAccountHolder = bankAccountHolder,
+                bankBranch = bankBranch,
+                existingAllowedEmails = emails,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = { _snackbarEvents.tryEmit("Bank transfer details saved") },
+                onFailure = { e -> _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to save bank details") },
+            )
+        }
+    }
+
     fun upsertWhitelistMember(
         email: String,
         displayName: String,
         phone: String,
         active: Boolean,
+        spotifyEmail: String? = null,
         onDone: () -> Unit,
     ) {
         viewModelScope.launch {
@@ -737,6 +891,7 @@ class AtaPotifyViewModel(
                 allCurrentWhitelist = whitelist.value,
                 activeMonth = currentMonth.value,
                 activeMonthMembers = currentMonthMembers.value,
+                spotifyEmail = spotifyEmail,
             )
             _isBusy.value = false
             res.fold(
@@ -861,6 +1016,10 @@ class AtaPotifyViewModel(
         _snackbarEvents.tryEmit("Disconnected Spotify account on this device")
     }
 
+    fun emitSnackbar(message: String) {
+        _snackbarEvents.tryEmit(message)
+    }
+
     private fun buildStandardWhatsAppMessage(
         name: String,
         monthLabel: String,
@@ -881,3 +1040,4 @@ class AtaPotifyViewModel(
         const val STOP_TIMEOUT_MS = 5000L
     }
 }
+

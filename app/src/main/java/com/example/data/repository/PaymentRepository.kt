@@ -677,6 +677,198 @@ class PaymentRepository(
         }
     }
 
+    suspend fun updateBankDetails(
+        bankName: String,
+        bankAccountNumber: String,
+        bankAccountHolder: String,
+        bankBranch: String,
+        existingAllowedEmails: List<String>,
+    ): Result<Unit> {
+        requireUserId()
+        val cleanBankName = bankName.trim().take(80)
+        val cleanAccNo = bankAccountNumber.trim().take(60)
+        val cleanHolder = bankAccountHolder.trim().take(80)
+        val cleanBranch = bankBranch.trim().take(80)
+
+        val configRef = db.collection("plan_config").document(AtaPotifyConstants.PLAN_CONFIG_DOC_ID)
+        return try {
+            val snap = configRef.get().await()
+            if (snap.exists()) {
+                configRef.update(
+                    mapOf(
+                        "bankName" to cleanBankName,
+                        "bankAccountNumber" to cleanAccNo,
+                        "bankAccountHolder" to cleanHolder,
+                        "bankBranch" to cleanBranch,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                ).await()
+            } else {
+                configRef.set(
+                    mapOf(
+                        "planName" to AtaPotifyConstants.DEFAULT_PLAN_NAME,
+                        "monthlyAmountLkr" to AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
+                        "currency" to AtaPotifyConstants.CURRENCY_LKR,
+                        "allowedEmails" to existingAllowedEmails.take(25),
+                        "bankName" to cleanBankName,
+                        "bankAccountNumber" to cleanAccNo,
+                        "bankAccountHolder" to cleanHolder,
+                        "bankBranch" to cleanBranch,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                ).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, configRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun confirmAdvancePaymentMonths(
+        startMonth: PaymentMonth,
+        member: MemberPaymentStatus,
+        monthsCount: Int,
+        activeWhitelist: List<WhitelistMember>,
+    ): Result<List<String>> {
+        val uid = requireUserId()
+        val safeMonthsCount = monthsCount.coerceIn(1, 12)
+        val targetMonthIds = AtaPotifyConstants.consecutiveMonthIds(startMonth.monthId, safeMonthsCount)
+        val memberEmailLower = AtaPotifyConstants.normalizeEmail(member.memberEmail)
+        val baseAllowedEmails = (
+            startMonth.allowedEmails +
+                activeWhitelist.filter { it.active }.map { AtaPotifyConstants.normalizeEmail(it.email) } +
+                memberEmailLower +
+                AtaPotifyConstants.ADMIN_EMAIL
+            ).distinct().take(25)
+
+        return try {
+            val batch = db.batch()
+            for (monthId in targetMonthIds) {
+                val monthRef = db.collection("payments").document(monthId)
+                val monthSnap = monthRef.get().await()
+                val memberRef = monthRef.collection("members").document(member.memberKey)
+
+                if (monthSnap.exists()) {
+                    val memberSnap = memberRef.get().await()
+                    if (memberSnap.exists()) {
+                        batch.update(
+                            memberRef,
+                            mapOf(
+                                "status" to AtaPotifyConstants.STATUS_PAID,
+                                "confirmedAt" to FieldValue.serverTimestamp(),
+                                "updatedAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    } else {
+                        batch.set(
+                            memberRef,
+                            mapOf(
+                                "memberKey" to member.memberKey,
+                                "memberEmail" to memberEmailLower,
+                                "displayName" to member.displayName.take(60),
+                                "status" to AtaPotifyConstants.STATUS_PAID,
+                                "amountLkr" to member.amountLkr,
+                                "hasReceipt" to false,
+                                "allowedEmails" to baseAllowedEmails,
+                                "reminderCount" to 0L,
+                                "createdAt" to FieldValue.serverTimestamp(),
+                                "confirmedAt" to FieldValue.serverTimestamp(),
+                                "updatedAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    }
+                } else {
+                    val label = AtaPotifyConstants.monthLabelFromId(monthId).take(40)
+                    batch.set(
+                        monthRef,
+                        mapOf(
+                            "monthId" to monthId,
+                            "displayLabel" to label,
+                            "amountLkr" to startMonth.amountLkr,
+                            "allowedEmails" to baseAllowedEmails,
+                            "createdByUid" to uid,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
+                    )
+                    val rosterKeys = mutableSetOf<String>()
+                    for (wl in activeWhitelist.filter { it.active }.take(25)) {
+                        rosterKeys.add(wl.memberKey)
+                        val isTarget = wl.memberKey == member.memberKey
+                        val wlRef = monthRef.collection("members").document(wl.memberKey)
+                        val payload = mutableMapOf<String, Any>(
+                            "memberKey" to wl.memberKey,
+                            "memberEmail" to AtaPotifyConstants.normalizeEmail(wl.email),
+                            "displayName" to wl.displayName.take(60),
+                            "status" to if (isTarget) AtaPotifyConstants.STATUS_PAID else AtaPotifyConstants.STATUS_PENDING,
+                            "amountLkr" to if (isTarget) member.amountLkr else startMonth.amountLkr,
+                            "hasReceipt" to false,
+                            "allowedEmails" to baseAllowedEmails,
+                            "reminderCount" to 0L,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
+                        if (isTarget) {
+                            payload["confirmedAt"] = FieldValue.serverTimestamp()
+                        }
+                        batch.set(wlRef, payload)
+                    }
+                    if (member.memberKey !in rosterKeys) {
+                        batch.set(
+                            memberRef,
+                            mapOf(
+                                "memberKey" to member.memberKey,
+                                "memberEmail" to memberEmailLower,
+                                "displayName" to member.displayName.take(60),
+                                "status" to AtaPotifyConstants.STATUS_PAID,
+                                "amountLkr" to member.amountLkr,
+                                "hasReceipt" to false,
+                                "allowedEmails" to baseAllowedEmails,
+                                "reminderCount" to 0L,
+                                "createdAt" to FieldValue.serverTimestamp(),
+                                "confirmedAt" to FieldValue.serverTimestamp(),
+                                "updatedAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    }
+                }
+            }
+            batch.commit().await()
+            Result.success(targetMonthIds)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "payments/${startMonth.monthId}", auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchAllMonthsStats(
+        months: List<PaymentMonth>,
+        userEmailLower: String,
+        isAdmin: Boolean,
+    ): Map<String, List<ListeningStat>> {
+        if (auth.currentUser == null || months.isEmpty()) return emptyMap()
+        val result = mutableMapOf<String, List<ListeningStat>>()
+        for (month in months.take(12)) {
+            val baseCol = db.collection("payments").document(month.monthId).collection("stats")
+            val query = if (isAdmin) baseCol else baseCol.whereArrayContains("allowedEmails", userEmailLower)
+            val stats = try {
+                query.get().await()
+                    .toObjects(ListeningStat::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyList()
+            }
+            result[month.monthId] = stats
+        }
+        return result
+    }
+
     suspend fun upsertWhitelistMember(
         email: String,
         displayName: String,
@@ -685,6 +877,7 @@ class PaymentRepository(
         allCurrentWhitelist: List<WhitelistMember>,
         activeMonth: PaymentMonth?,
         activeMonthMembers: List<MemberPaymentStatus>,
+        spotifyEmail: String? = null,
     ): Result<Unit> {
         requireUserId()
         val emailLower = AtaPotifyConstants.normalizeEmail(email)
@@ -692,6 +885,7 @@ class PaymentRepository(
         val cleanName = displayName.trim().take(60)
         require(cleanName.isNotEmpty()) { "Name cannot be empty" }
         val cleanPhone = AtaPotifyConstants.sanitizeWhatsAppDigits(phone).take(24)
+        val cleanSpotifyEmail = spotifyEmail?.let { AtaPotifyConstants.normalizeEmail(it).take(160) }
         val memberKey = AtaPotifyConstants.memberKeyForEmail(emailLower)
 
         val whitelistRef = db.collection("whitelist").document(memberKey)
@@ -713,15 +907,16 @@ class PaymentRepository(
 
         val batch = db.batch()
         if (existingDoc != null && existingDoc.exists()) {
-            batch.update(
-                whitelistRef,
-                mapOf(
-                    "displayName" to cleanName,
-                    "phone" to cleanPhone,
-                    "active" to active,
-                    "updatedAt" to FieldValue.serverTimestamp(),
-                )
+            val updates = mutableMapOf<String, Any>(
+                "displayName" to cleanName,
+                "phone" to cleanPhone,
+                "active" to active,
+                "updatedAt" to FieldValue.serverTimestamp(),
             )
+            if (cleanSpotifyEmail != null) {
+                updates["spotifyEmail"] = cleanSpotifyEmail
+            }
+            batch.update(whitelistRef, updates)
         } else {
             batch.set(
                 whitelistRef,
@@ -730,6 +925,7 @@ class PaymentRepository(
                     "email" to emailLower,
                     "displayName" to cleanName,
                     "phone" to cleanPhone,
+                    "spotifyEmail" to (cleanSpotifyEmail ?: ""),
                     "role" to AtaPotifyConstants.ROLE_MEMBER,
                     "active" to active,
                     "createdAt" to FieldValue.serverTimestamp(),

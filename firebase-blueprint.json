@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Authenticated user profile storing display name, role, and WhatsApp phone number.",
+      "description": "Authenticated user profile storing display name, role, WhatsApp phone number, and Spotify email.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "description": "Firebase Auth UID" },
@@ -10,6 +10,7 @@
         "displayName": { "type": "string", "description": "User display name" },
         "role": { "type": "string", "enum": ["admin", "member"], "description": "Access control role" },
         "phone": { "type": "string", "description": "WhatsApp phone digits with country code" },
+        "spotifyEmail": { "type": "string", "description": "Email address assigned to the user's Spotify account" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
       },
@@ -17,26 +18,31 @@
     },
     "PlanConfig": {
       "title": "PlanConfig",
-      "description": "Global Spotify Family plan settings including fixed monthly LKR amount.",
+      "description": "Global Spotify Family plan settings including fixed monthly LKR amount and bank transfer details.",
       "type": "object",
       "properties": {
         "planName": { "type": "string", "description": "Display name of the shared subscription" },
         "monthlyAmountLkr": { "type": "integer", "description": "Fixed rounded monthly amount per member in LKR" },
         "currency": { "type": "string", "description": "Currency code (LKR)" },
         "allowedEmails": { "type": "array", "description": "Lowercase emails of whitelisted members and admin" },
+        "bankName": { "type": "string", "description": "Bank name for monthly transfer" },
+        "bankAccountNumber": { "type": "string", "description": "Bank account number for monthly transfer" },
+        "bankAccountHolder": { "type": "string", "description": "Bank account holder name" },
+        "bankBranch": { "type": "string", "description": "Bank branch name" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
       },
       "required": ["planName", "monthlyAmountLkr", "currency", "allowedEmails", "updatedAt"]
     },
     "WhitelistMember": {
       "title": "WhitelistMember",
-      "description": "Admin-managed whitelisted friend roster with WhatsApp contact number.",
+      "description": "Admin-managed whitelisted friend roster with WhatsApp contact number and reported Spotify email.",
       "type": "object",
       "properties": {
         "memberKey": { "type": "string", "description": "Deterministic email-derived document key" },
         "email": { "type": "string", "description": "Lowercase whitelisted Google email" },
         "displayName": { "type": "string", "description": "Friend display name" },
         "phone": { "type": "string", "description": "WhatsApp number in international digits" },
+        "spotifyEmail": { "type": "string", "description": "Email address assigned to the friend's Spotify account" },
         "role": { "type": "string", "enum": ["member"], "description": "Member role" },
         "active": { "type": "boolean", "description": "Whether friend is active in current plan" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },

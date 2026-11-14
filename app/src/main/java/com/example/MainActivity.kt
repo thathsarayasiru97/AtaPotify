@@ -1,5 +1,8 @@
 package com.example
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -91,6 +94,7 @@ import com.example.data.worker.SpotifySyncScheduler
 import com.example.ui.screens.AccessDeniedScreen
 import com.example.ui.screens.AddMemberToMonthDialog
 import com.example.ui.screens.AdminScreen
+import com.example.ui.screens.AdvancePaymentDialog
 import com.example.ui.screens.AppUpdateAvailableDialog
 import com.example.ui.screens.AutoReminderQueueSheet
 import com.example.ui.screens.BoardScreen
@@ -101,6 +105,7 @@ import com.example.ui.screens.LoadingGateScreen
 import com.example.ui.screens.ProfileEditorSheet
 import com.example.ui.screens.ReceiptSlipDialog
 import com.example.ui.screens.SignInScreen
+import com.example.ui.screens.SpotifyEmailOnboardingDialog
 import com.example.ui.screens.SpotifySetupHintDialog
 import com.example.ui.screens.StartNewMonthDialog
 import com.example.ui.screens.WhitelistMemberDialog
@@ -314,6 +319,8 @@ private fun MainAppScaffold(
     val spotifyConnected by viewModel.spotifyConnected.collectAsStateWithLifecycle()
     val spotifyName by viewModel.spotifyName.collectAsStateWithLifecycle()
     val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
+    val needsSpotifyEmailPrompt by viewModel.needsSpotifyEmailPrompt.collectAsStateWithLifecycle()
+    val allTimeWrapped by viewModel.allTimeWrapped.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.BOARD) }
     var showProfileSheet by remember { mutableStateOf(false) }
@@ -322,9 +329,18 @@ private fun MainAppScaffold(
     var showWhitelistDialog by remember { mutableStateOf(false) }
     var editingWhitelistMember by remember { mutableStateOf<WhitelistMember?>(null) }
     var editingPaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
+    var advancePaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
     var deletingPaymentContext by remember { mutableStateOf<Triple<PaymentMonth, MemberPaymentStatus, List<MemberPaymentStatus>>?>(null) }
     var addMemberTargetContext by remember { mutableStateOf<Pair<PaymentMonth, List<MemberPaymentStatus>>?>(null) }
     var deletingMonthContext by remember { mutableStateOf<Triple<PaymentMonth, List<MemberPaymentStatus>, List<ListeningStat>>?>(null) }
+
+    val copyToClipboard: (String, String) -> Unit = remember(context, viewModel) {
+        { label, text ->
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+            viewModel.emitSnackbar("Copied $label to clipboard")
+        }
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, viewModel) {
@@ -545,6 +561,7 @@ private fun MainAppScaffold(
                             whitelist = whitelist,
                             overdueReminders = overdueReminders,
                             defaultAmountLkr = planConfig.monthlyAmountLkr,
+                            planConfig = planConfig,
                             spotifyConnected = spotifyConnected,
                             spotifyName = spotifyName,
                             isSpotifyClientConfigured = viewModel.isSpotifyClientConfigured,
@@ -575,14 +592,14 @@ private fun MainAppScaffold(
                                     viewModel.confirmMemberPayment(month.monthId, member.memberKey)
                                 }
                             },
+                            onAdvancePayClick = { member ->
+                                currentMonth?.let { month ->
+                                    advancePaymentContext = month to member
+                                }
+                            },
                             onRewindPaid = { member ->
                                 currentMonth?.let { month ->
                                     viewModel.rewindMemberPayment(month.monthId, member)
-                                }
-                            },
-                            onQuickStatusOverride = { member, targetStatus ->
-                                currentMonth?.let { month ->
-                                    viewModel.setMemberPaymentStatusOverride(month.monthId, member, targetStatus)
                                 }
                             },
                             onEditPayment = { member ->
@@ -600,6 +617,17 @@ private fun MainAppScaffold(
                                     viewModel.sendWhatsAppReminder(context, month, member, phone)
                                 }
                             },
+                            onCopyText = copyToClipboard,
+                            onShareMonthlySummary = {
+                                currentMonth?.let { month ->
+                                    viewModel.shareMonthlySummaryToWhatsApp(
+                                        context = context,
+                                        month = month,
+                                        members = currentMonthMembers,
+                                        stats = currentMonthStats,
+                                    )
+                                }
+                            },
                             onOpenOverdueQueue = { viewModel.openAutoReminderSheet() },
                             onConnectSpotify = { viewModel.launchSpotifyConnect(context) },
                             onSyncSpotify = { viewModel.syncSpotifyStats() },
@@ -614,6 +642,7 @@ private fun MainAppScaffold(
                             members = historyMonthMembers,
                             stats = historyMonthStats,
                             whitelist = whitelist,
+                            allTimeWrapped = allTimeWrapped,
                             isBusy = isBusy,
                             onSelectMonth = { viewModel.selectHistoryMonth(it) },
                             onOpenAddMemberToMonth = { month ->
@@ -621,6 +650,14 @@ private fun MainAppScaffold(
                             },
                             onDeleteMonth = { month ->
                                 deletingMonthContext = Triple(month, historyMonthMembers, historyMonthStats)
+                            },
+                            onShareMonthSummary = { month ->
+                                viewModel.shareMonthlySummaryToWhatsApp(
+                                    context = context,
+                                    month = month,
+                                    members = historyMonthMembers,
+                                    stats = historyMonthStats,
+                                )
                             },
                             onViewSlip = { member ->
                                 selectedHistoryMonth?.let { month ->
@@ -630,6 +667,11 @@ private fun MainAppScaffold(
                             onConfirmPaid = { member ->
                                 selectedHistoryMonth?.let { month ->
                                     viewModel.confirmMemberPayment(month.monthId, member.memberKey)
+                                }
+                            },
+                            onAdvancePayClick = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    advancePaymentContext = month to member
                                 }
                             },
                             onRewindPaid = { member ->
@@ -667,6 +709,10 @@ private fun MainAppScaffold(
                             onSaveLkrRate = { amount, alsoUpdateActive ->
                                 viewModel.updateMonthlyLkrRate(amount, alsoUpdateActive)
                             },
+                            onSaveBankDetails = { bankName, accNo, holder, branch ->
+                                viewModel.updateBankDetails(bankName, accNo, holder, branch)
+                            },
+                            onCopyText = copyToClipboard,
                             onAddMemberClick = {
                                 editingWhitelistMember = null
                                 showWhitelistDialog = true
@@ -681,6 +727,7 @@ private fun MainAppScaffold(
                                     displayName = member.displayName,
                                     phone = member.phone,
                                     active = active,
+                                    spotifyEmail = member.spotifyEmail,
                                     onDone = {},
                                 )
                             },
@@ -701,8 +748,8 @@ private fun MainAppScaffold(
             spotifyConnected = spotifyConnected,
             spotifyName = spotifyName,
             isBusy = isBusy,
-            onSaveProfile = { newName, newPhone ->
-                viewModel.updateOwnProfile(newName, newPhone) {
+            onSaveProfile = { newName, newPhone, newSpotifyEmail ->
+                viewModel.updateOwnProfile(newName, newPhone, newSpotifyEmail) {
                     showProfileSheet = false
                 }
             },
@@ -774,12 +821,13 @@ private fun MainAppScaffold(
         WhitelistMemberDialog(
             editingMember = editingWhitelistMember,
             isBusy = isBusy,
-            onSave = { email, name, phone, active ->
+            onSave = { email, name, phone, spotifyEmail, active ->
                 viewModel.upsertWhitelistMember(
                     email = email,
                     displayName = name,
                     phone = phone,
                     active = active,
+                    spotifyEmail = spotifyEmail,
                     onDone = {
                         showWhitelistDialog = false
                         editingWhitelistMember = null
@@ -791,6 +839,25 @@ private fun MainAppScaffold(
                 editingWhitelistMember = null
             },
         )
+    }
+
+    advancePaymentContext?.let { (month, member) ->
+        if (session.isAdmin) {
+            AdvancePaymentDialog(
+                member = member,
+                startMonth = month,
+                isBusy = isBusy,
+                onConfirmAdvance = { monthsCount ->
+                    viewModel.confirmAdvancePaymentMonths(
+                        startMonth = month,
+                        member = member,
+                        monthsCount = monthsCount,
+                        onDone = { advancePaymentContext = null },
+                    )
+                },
+                onDismiss = { advancePaymentContext = null },
+            )
+        }
     }
 
     editingPaymentContext?.let { (month, member) ->
@@ -881,6 +948,17 @@ private fun MainAppScaffold(
 
     if (showSpotifyHintDialog) {
         SpotifySetupHintDialog(onDismiss = { showSpotifyHintDialog = false })
+    }
+
+    if (needsSpotifyEmailPrompt) {
+        SpotifyEmailOnboardingDialog(
+            googleEmail = session.email,
+            isBusy = isBusy,
+            onSave = { spotifyEmail ->
+                viewModel.submitInitialSpotifyEmail(spotifyEmail)
+            },
+            onSkip = { viewModel.dismissSpotifyEmailPromptForSession() },
+        )
     }
 
     availableUpdate?.let { release ->

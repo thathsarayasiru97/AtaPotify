@@ -30,6 +30,7 @@ sealed interface AccessResolution {
         val memberKey: String,
         val displayName: String,
         val phone: String,
+        val spotifyEmail: String = "",
     ) : AccessResolution
 
     data class Denied(val email: String) : AccessResolution
@@ -109,6 +110,8 @@ class AuthRepository(
                 ?: fallbackName
             val resolvedPhone = existingUser?.phone?.takeIf { it.isNotBlank() }
                 ?: whitelistEntry?.phone.orEmpty()
+            val resolvedSpotifyEmail = existingUser?.spotifyEmail?.takeIf { it.isNotBlank() }
+                ?: whitelistEntry?.spotifyEmail.orEmpty()
             val resolvedRole = if (isAdmin) AtaPotifyConstants.ROLE_ADMIN else AtaPotifyConstants.ROLE_MEMBER
 
             if (existingUser == null) {
@@ -118,6 +121,7 @@ class AuthRepository(
                     "displayName" to resolvedName.take(60),
                     "role" to resolvedRole,
                     "phone" to resolvedPhone.take(24),
+                    "spotifyEmail" to resolvedSpotifyEmail.take(160),
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -139,6 +143,7 @@ class AuthRepository(
                     memberKey = memberKey,
                     displayName = resolvedName,
                     phone = resolvedPhone,
+                    spotifyEmail = resolvedSpotifyEmail,
                 )
             )
         } catch (e: CancellationException) {
@@ -169,17 +174,16 @@ class AuthRepository(
             }
     }
 
-    suspend fun updateOwnProfile(
+    suspend fun saveOwnSpotifyEmail(
         emailLower: String,
         isAdmin: Boolean,
-        newDisplayName: String,
-        newPhone: String,
-        monthIdsToSync: List<String>,
+        spotifyEmail: String,
     ): Result<Unit> {
         val uid = requireUserId()
-        val trimmedName = newDisplayName.trim().take(60)
-        val cleanPhone = AtaPotifyConstants.sanitizeWhatsAppDigits(newPhone).take(24)
-        require(trimmedName.isNotEmpty()) { "Display name cannot be blank" }
+        val cleanSpotifyEmail = AtaPotifyConstants.normalizeEmail(spotifyEmail).take(160)
+        require(cleanSpotifyEmail.contains("@") && cleanSpotifyEmail.length >= 3) {
+            "Enter a valid Spotify email address"
+        }
 
         val userPath = "users/$uid"
         val memberKey = AtaPotifyConstants.memberKeyForEmail(emailLower)
@@ -188,8 +192,7 @@ class AuthRepository(
         batch.update(
             userRef,
             mapOf(
-                "displayName" to trimmedName,
-                "phone" to cleanPhone,
+                "spotifyEmail" to cleanSpotifyEmail,
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
         )
@@ -208,11 +211,72 @@ class AuthRepository(
                 batch.update(
                     whitelistRef,
                     mapOf(
-                        "displayName" to trimmedName,
-                        "phone" to cleanPhone,
+                        "spotifyEmail" to cleanSpotifyEmail,
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
                 )
+            }
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, userPath, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateOwnProfile(
+        emailLower: String,
+        isAdmin: Boolean,
+        newDisplayName: String,
+        newPhone: String,
+        monthIdsToSync: List<String>,
+        newSpotifyEmail: String? = null,
+    ): Result<Unit> {
+        val uid = requireUserId()
+        val trimmedName = newDisplayName.trim().take(60)
+        val cleanPhone = AtaPotifyConstants.sanitizeWhatsAppDigits(newPhone).take(24)
+        val cleanSpotifyEmail = newSpotifyEmail?.let { AtaPotifyConstants.normalizeEmail(it).take(160) }
+        require(trimmedName.isNotEmpty()) { "Display name cannot be blank" }
+
+        val userPath = "users/$uid"
+        val memberKey = AtaPotifyConstants.memberKeyForEmail(emailLower)
+        val batch = db.batch()
+        val userRef = db.collection("users").document(uid)
+        val userUpdates = mutableMapOf<String, Any>(
+            "displayName" to trimmedName,
+            "phone" to cleanPhone,
+            "updatedAt" to FieldValue.serverTimestamp(),
+        )
+        if (cleanSpotifyEmail != null) {
+            userUpdates["spotifyEmail"] = cleanSpotifyEmail
+        }
+        batch.update(userRef, userUpdates)
+
+        if (!isAdmin) {
+            val whitelistRef = db.collection("whitelist").document(memberKey)
+            val whitelistExists = try {
+                whitelistRef.get().await().exists()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.GET, whitelistRef.path, auth)
+                false
+            }
+            if (whitelistExists) {
+                val whitelistUpdates = mutableMapOf<String, Any>(
+                    "displayName" to trimmedName,
+                    "phone" to cleanPhone,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+                if (cleanSpotifyEmail != null) {
+                    whitelistUpdates["spotifyEmail"] = cleanSpotifyEmail
+                }
+                batch.update(whitelistRef, whitelistUpdates)
             }
         }
 

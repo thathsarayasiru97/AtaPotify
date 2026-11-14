@@ -88,4 +88,53 @@ class MonthlyBillingSummaryTest {
         assertEquals(0, summary.totalCount)
         assertEquals(0f, summary.collectionFraction, 0.0001f)
     }
+
+    @Test
+    fun consecutiveMonthIdsRollsAcrossYearBoundary() {
+        val ids = AtaPotifyConstants.consecutiveMonthIds("2026-11", 4)
+        assertEquals(listOf("2026-11", "2026-12", "2027-01", "2027-02"), ids)
+    }
+
+    @Test
+    fun calculatesAllTimeWrappedSummaryAndStandings() {
+        val monthRates = mapOf("2026-10" to 450L, "2026-11" to 450L)
+        val statsByMonth = mapOf(
+            "2026-10" to listOf(
+                ListeningStat(
+                    memberKey = "alice",
+                    displayName = "Alice",
+                    minutesListened = 600L,
+                    tracksCounted = 150L,
+                    topArtist = "Daft Punk",
+                    topTrack = "Get Lucky",
+                ),
+                ListeningStat(
+                    memberKey = "bob",
+                    displayName = "Bob",
+                    minutesListened = 300L,
+                    tracksCounted = 80L,
+                    topArtist = "Coldplay",
+                    topTrack = "Yellow",
+                ),
+            ),
+            "2026-11" to listOf(
+                ListeningStat(
+                    memberKey = "alice",
+                    displayName = "Alice",
+                    minutesListened = 600L,
+                    tracksCounted = 140L,
+                    topArtist = "Daft Punk",
+                    topTrack = "Instant Crush",
+                ),
+            ),
+        )
+
+        val wrapped = checkNotNull(calculateAllTimeWrappedSummary(statsByMonth, monthRates))
+        assertEquals(2, wrapped.monthsTracked)
+        assertEquals(1500L, wrapped.totalGroupMinutes)
+        assertEquals(370L, wrapped.totalGroupTracks)
+        assertEquals("Alice", wrapped.topListener?.displayName)
+        assertEquals(1200L, wrapped.topListener?.totalMinutes)
+        assertEquals("Daft Punk", wrapped.topListener?.favoriteArtist)
+    }
 }

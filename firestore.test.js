@@ -249,11 +249,18 @@ test("User can edit their displayName and phone, and reject shadow fields", asyn
     })
   );
 
-  // Member can update own displayName/phone in whitelist and displayName in active month
+  // Member can update own displayName/phone/spotifyEmail in users and whitelist, and displayName in active month
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      spotifyEmail: "alice.spotify@gmail.com",
+      updatedAt: new Date(),
+    })
+  );
   await assertSucceeds(
     aliceDb.collection("whitelist").doc(ALICE_KEY).update({
       displayName: "Alice Jay",
       phone: "94779998888",
+      spotifyEmail: "alice.spotify@gmail.com",
       updatedAt: new Date(),
     })
   );
@@ -369,6 +376,10 @@ test("Admin can create month batch, confirm payment, log reminder, and update LK
   await assertSucceeds(
     adminDb.collection("plan_config").doc("settings").update({
       monthlyAmountLkr: 500,
+      bankName: "Commercial Bank",
+      bankAccountNumber: "8001234567",
+      bankAccountHolder: "Y. Thathsara",
+      bankBranch: "Galle",
       updatedAt: new Date(),
     })
   );
