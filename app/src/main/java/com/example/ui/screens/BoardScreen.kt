@@ -26,13 +26,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
@@ -63,7 +68,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -74,8 +78,10 @@ import com.example.R
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
+import com.example.data.model.MonthlyBillingSummary
 import com.example.data.model.PaymentMonth
 import com.example.data.model.WhitelistMember
+import com.example.data.model.calculateMonthlyBillingSummary
 import com.example.data.repository.AccessResolution
 import com.example.ui.theme.AmberContainer
 import com.example.ui.theme.AmberWarning
@@ -94,13 +100,17 @@ import com.example.ui.theme.SurfaceHighest
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.OverdueReminderCandidate
+import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Composable
 fun BoardScreen(
     session: AccessResolution.Authorized,
+    adminDisplayName: String,
     currentMonth: PaymentMonth?,
     members: List<MemberPaymentStatus>,
     stats: List<ListeningStat>,
@@ -112,17 +122,21 @@ fun BoardScreen(
     isSpotifyClientConfigured: Boolean,
     isBusy: Boolean,
     onOpenStartMonth: () -> Unit,
+    onOpenAddMemberToMonth: () -> Unit,
+    onDeleteCurrentMonth: () -> Unit,
     onUploadSlip: (android.net.Uri, MemberPaymentStatus) -> Unit,
     onViewSlip: (MemberPaymentStatus) -> Unit,
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
+    onRewindPaid: (MemberPaymentStatus) -> Unit,
+    onEditPayment: (MemberPaymentStatus) -> Unit,
+    onDeletePayment: (MemberPaymentStatus) -> Unit,
     onRemindMember: (MemberPaymentStatus, String) -> Unit,
     onOpenOverdueQueue: () -> Unit,
     onConnectSpotify: () -> Unit,
     onSyncSpotify: () -> Unit,
     onShowSpotifySetupHint: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var selectedSection by remember { mutableIntStateOf(0) } // 0 = Payments, 1 = Listening Value
+    var selectedSection by remember { mutableIntStateOf(0) } // 0 = Payments, 1 = Leaderboard
     var pendingUploadTarget by remember { androidx.compose.runtime.mutableStateOf<MemberPaymentStatus?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -140,6 +154,19 @@ fun BoardScreen(
         whitelist.associate { it.memberKey to it.phone }
     }
 
+    val billingSummary = remember(members) {
+        calculateMonthlyBillingSummary(members)
+    }
+
+    val leaderboardRoster = remember(stats, members, adminDisplayName, session) {
+        buildLeaderboardRoster(
+            syncedStats = stats,
+            monthMembers = members,
+            adminDisplayName = adminDisplayName,
+            session = session,
+        )
+    }
+
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter,
@@ -154,11 +181,20 @@ fun BoardScreen(
             item {
                 MonthHeroCard(
                     month = currentMonth,
-                    members = members,
+                    summary = billingSummary,
                     defaultAmountLkr = defaultAmountLkr,
                     isAdmin = session.isAdmin,
                     onStartNewMonth = onOpenStartMonth,
                 )
+            }
+
+            if (currentMonth != null) {
+                item {
+                    MonthlyBillingSummaryCard(
+                        month = currentMonth,
+                        summary = billingSummary,
+                    )
+                }
             }
 
             if (session.isAdmin && overdueReminders.isNotEmpty()) {
@@ -215,7 +251,7 @@ fun BoardScreen(
                                 )
                             },
                         ) {
-                            Text("Spotify Value")
+                            Text(stringResource(R.string.tab_leaderboard))
                         }
                     }
                 }
@@ -229,6 +265,58 @@ fun BoardScreen(
                     )
                 }
             } else if (selectedSection == 0) {
+                if (session.isAdmin) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Payment Logs (${members.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = TextSecondary,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(
+                                    onClick = onOpenAddMemberToMonth,
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("add_member_to_month_button"),
+                                    border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.45f)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PersonAdd,
+                                        contentDescription = null,
+                                        tint = SpotifyEmerald,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.btn_add_to_month), color = SpotifyEmerald)
+                                }
+                                OutlinedButton(
+                                    onClick = onDeleteCurrentMonth,
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("delete_current_month_button"),
+                                    border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.45f)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteOutline,
+                                        contentDescription = stringResource(R.string.btn_delete_month),
+                                        tint = CoralPending,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 items(members, key = { it.memberKey }) { member ->
                     val isSelf = member.memberEmail.equals(session.email, ignoreCase = true)
                     val phone = phoneByKey[member.memberKey].orEmpty()
@@ -246,6 +334,9 @@ fun BoardScreen(
                         },
                         onViewSlipClick = { onViewSlip(member) },
                         onMarkPaidClick = { onConfirmPaid(member) },
+                        onRewindPaidClick = { onRewindPaid(member) },
+                        onEditPaymentClick = { onEditPayment(member) },
+                        onDeletePaymentClick = { onDeletePayment(member) },
                         onRemindClick = { onRemindMember(member, phone) },
                     )
                 }
@@ -264,17 +355,18 @@ fun BoardScreen(
                     )
                 }
 
-                if (stats.isEmpty()) {
+                if (leaderboardRoster.isEmpty()) {
                     item {
                         EmptyLeaderboardState()
                     }
                 } else {
-                    items(stats.withIndex().toList(), key = { it.value.memberKey }) { (index, stat) ->
+                    items(leaderboardRoster.withIndex().toList(), key = { it.value.memberKey }) { (index, stat) ->
                         ListeningLeaderboardCard(
                             rank = index + 1,
                             stat = stat,
                             amountLkr = currentMonth.amountLkr,
                             isSelf = stat.memberEmail.equals(session.email, ignoreCase = true),
+                            isAdminEntry = stat.memberEmail.equals(AtaPotifyConstants.ADMIN_EMAIL, ignoreCase = true),
                         )
                     }
                 }
@@ -288,16 +380,11 @@ fun BoardScreen(
 @Composable
 private fun MonthHeroCard(
     month: PaymentMonth?,
-    members: List<MemberPaymentStatus>,
+    summary: MonthlyBillingSummary,
     defaultAmountLkr: Long,
     isAdmin: Boolean,
     onStartNewMonth: () -> Unit,
 ) {
-    val paidCount = members.count { it.status == AtaPotifyConstants.STATUS_PAID }
-    val verifyingCount = members.count { it.status == AtaPotifyConstants.STATUS_VERIFYING }
-    val pendingCount = members.count { it.status == AtaPotifyConstants.STATUS_PENDING }
-    val totalCount = members.size.coerceAtLeast(1)
-    val progress = if (members.isEmpty()) 0f else paidCount.toFloat() / totalCount.toFloat()
     val amountLkr = month?.amountLkr ?: defaultAmountLkr
 
     Card(
@@ -347,12 +434,12 @@ private fun MonthHeroCard(
                             horizontalAlignment = Alignment.End,
                         ) {
                             Text(
-                                text = "LKR $amountLkr",
+                                text = "LKR ${formatLkr(amountLkr)}",
                                 style = MonoNumericLarge.copy(fontSize = 18.sp),
                                 color = SpotifyEmerald,
                             )
                             Text(
-                                text = "per friend",
+                                text = "default share",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = EmeraldSoftText,
                             )
@@ -367,18 +454,18 @@ private fun MonthHeroCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(
-                                text = "$paidCount of ${members.size} Paid",
+                                text = "${summary.paidCount} of ${summary.totalCount} Paid",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
-                                text = "LKR ${paidCount * amountLkr} / ${members.size * amountLkr}",
+                                text = "LKR ${formatLkr(summary.collectedLkr)} / ${formatLkr(summary.expectedTotalLkr)}",
                                 style = MonoNumericSmall,
                                 color = TextSecondary,
                             )
                         }
                         LinearProgressIndicator(
-                            progress = { progress },
+                            progress = { summary.collectionFraction },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(8.dp)
@@ -387,9 +474,9 @@ private fun MonthHeroCard(
                             trackColor = SurfaceHighest,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            MiniCounterChip("Paid: $paidCount", SpotifyEmerald, EmeraldContainer)
-                            MiniCounterChip("Verifying: $verifyingCount", AmberWarning, AmberContainer)
-                            MiniCounterChip("Pending: $pendingCount", CoralPending, CoralContainer)
+                            MiniCounterChip("Paid: ${summary.paidCount}", SpotifyEmerald, EmeraldContainer)
+                            MiniCounterChip("Verifying: ${summary.verifyingCount}", AmberWarning, AmberContainer)
+                            MiniCounterChip("Pending: ${summary.pendingCount}", CoralPending, CoralContainer)
                         }
                     }
                 }
@@ -423,6 +510,248 @@ private fun MonthHeroCard(
         }
     }
 }
+
+@Composable
+private fun MonthlyBillingSummaryCard(
+    month: PaymentMonth,
+    summary: MonthlyBillingSummary,
+) {
+    val isSettled = summary.totalCount > 0 && summary.netBalanceLkr >= 0L
+    val pctSettled = (summary.collectionFraction * 100f).roundToInt()
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("billing_summary_card"),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(
+            1.dp,
+            if (isSettled) SpotifyEmerald.copy(alpha = 0.45f) else BorderSubtle,
+        ),
+        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(EmeraldContainer),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccountBalanceWallet,
+                            contentDescription = stringResource(R.string.cd_billing_summary),
+                            tint = SpotifyEmerald,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = stringResource(R.string.title_monthly_billing_summary),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "${month.displayLabel} • Target LKR ${formatLkr(summary.expectedTotalLkr)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                        )
+                    }
+                }
+
+                Surface(
+                    color = if (isSettled) EmeraldContainer else AmberContainer,
+                    shape = RoundedCornerShape(999.dp),
+                ) {
+                    Text(
+                        text = if (isSettled) "100% Settled" else "$pctSettled% Collected",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isSettled) SpotifyEmerald else AmberWarning,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                }
+            }
+
+            if (summary.expectedTotalLkr > 0L) {
+                val paidWeight = summary.collectedLkr.toFloat() / summary.expectedTotalLkr.toFloat()
+                val verifyingWeight = summary.verifyingLkr.toFloat() / summary.expectedTotalLkr.toFloat()
+                val pendingWeight = summary.pendingOnlyLkr.toFloat() / summary.expectedTotalLkr.toFloat()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(CircleShape)
+                        .background(SurfaceHighest),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (paidWeight > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .weight(paidWeight)
+                                .height(8.dp)
+                                .background(SpotifyEmerald),
+                        )
+                    }
+                    if (verifyingWeight > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .weight(verifyingWeight)
+                                .height(8.dp)
+                                .background(AmberWarning),
+                        )
+                    }
+                    if (pendingWeight > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .weight(pendingWeight)
+                                .height(8.dp)
+                                .background(CoralPending),
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                SummaryMetricTile(
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("summary_collected_amount"),
+                    label = stringResource(R.string.label_total_collected),
+                    value = "LKR ${formatLkr(summary.collectedLkr)}",
+                    subtext = "${summary.paidCount} of ${summary.totalCount} paid",
+                    accentColor = SpotifyEmerald,
+                    containerColor = SurfaceElevated,
+                )
+
+                val pendingSubtext = buildString {
+                    append("${summary.pendingCount} pending")
+                    if (summary.verifyingCount > 0) {
+                        append(" • ${summary.verifyingCount} verifying")
+                    }
+                }
+                SummaryMetricTile(
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("summary_pending_amount"),
+                    label = stringResource(R.string.label_pending_amounts),
+                    value = "LKR ${formatLkr(summary.totalPendingLkr)}",
+                    subtext = pendingSubtext,
+                    accentColor = if (summary.totalPendingLkr == 0L) SpotifyEmerald else AmberWarning,
+                    containerColor = SurfaceElevated,
+                )
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("summary_net_balance"),
+                color = if (isSettled) EmeraldContainer.copy(alpha = 0.55f) else CoralContainer.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (isSettled) SpotifyEmerald.copy(alpha = 0.4f) else CoralPending.copy(alpha = 0.35f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.label_net_balance),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = when {
+                                summary.totalCount == 0 -> "No payment logs recorded yet"
+                                summary.netBalanceLkr == 0L -> "All scheduled shares collected"
+                                else -> "Remaining shortfall vs LKR ${formatLkr(summary.expectedTotalLkr)} expected"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    Text(
+                        text = when {
+                            summary.netBalanceLkr < 0L -> "-LKR ${formatLkr(abs(summary.netBalanceLkr))}"
+                            summary.netBalanceLkr > 0L -> "+LKR ${formatLkr(summary.netBalanceLkr)}"
+                            else -> "LKR 0"
+                        },
+                        style = MonoNumericLarge.copy(fontSize = 18.sp),
+                        color = if (isSettled || summary.totalCount == 0) SpotifyEmerald else CoralPending,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryMetricTile(
+    modifier: Modifier,
+    label: String,
+    value: String,
+    subtext: String,
+    accentColor: Color,
+    containerColor: Color,
+) {
+    Surface(
+        modifier = modifier,
+        color = containerColor,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, BorderSubtle),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = value,
+                style = MonoNumericLarge.copy(fontSize = 17.sp),
+                color = accentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = subtext,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun formatLkr(amount: Long): String =
+    NumberFormat.getNumberInstance(Locale.US).format(amount)
 
 @Composable
 private fun MiniCounterChip(label: String, fg: Color, bg: Color) {
@@ -499,6 +828,9 @@ fun MemberPaymentCard(
     onUploadSlipClick: () -> Unit,
     onViewSlipClick: () -> Unit,
     onMarkPaidClick: () -> Unit,
+    onRewindPaidClick: () -> Unit = {},
+    onEditPaymentClick: () -> Unit = {},
+    onDeletePaymentClick: () -> Unit = {},
     onRemindClick: () -> Unit,
 ) {
     val ageDays = member.pendingAgeDays()
@@ -620,130 +952,210 @@ fun MemberPaymentCard(
                 StatusPill(status = member.status)
             }
 
-            // Action row for Self or Admin
+            // Action rows for Self or Admin
             AnimatedVisibility(
                 visible = (isSelf && member.status != AtaPotifyConstants.STATUS_PAID) || isAdmin || (isSelf && member.hasReceipt),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (isSelf && member.status == AtaPotifyConstants.STATUS_PENDING) {
-                        Button(
-                            onClick = onUploadSlipClick,
-                            enabled = !isBusy,
-                            modifier = Modifier
-                                .weight(1f)
-                                .minimumInteractiveComponentSize()
-                                .testTag("upload_slip_button"),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = SpotifyEmerald,
-                                contentColor = MaterialTheme.colorScheme.onPrimary,
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.UploadFile,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.btn_upload_slip))
-                        }
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val hasPrimaryRow = (isSelf && member.status != AtaPotifyConstants.STATUS_PAID) ||
+                        ((isSelf || isAdmin) && member.hasReceipt) ||
+                        (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID) ||
+                        (isAdmin && member.status == AtaPotifyConstants.STATUS_PAID)
 
-                    if (isSelf && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                        OutlinedButton(
-                            onClick = onUploadSlipClick,
-                            enabled = !isBusy,
-                            modifier = Modifier
-                                .weight(1f)
-                                .minimumInteractiveComponentSize()
-                                .testTag("replace_slip_button"),
-                            border = BorderStroke(1.dp, BorderSubtle),
-                            shape = RoundedCornerShape(12.dp),
+                    if (hasPrimaryRow) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text(stringResource(R.string.btn_replace_slip))
-                        }
-                    }
-
-                    if ((isSelf || isAdmin) && member.hasReceipt) {
-                        FilledTonalButton(
-                            onClick = onViewSlipClick,
-                            modifier = Modifier
-                                .weight(1f)
-                                .minimumInteractiveComponentSize()
-                                .testTag("view_slip_${member.memberKey}"),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                                    AmberContainer
-                                } else {
-                                    SurfaceHighest
-                                },
-                                contentColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                                    AmberWarning
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
-                                contentDescription = null,
-                                modifier = Modifier.size(17.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
-                                    stringResource(R.string.btn_review_slip)
-                                } else {
-                                    stringResource(R.string.btn_view_slip)
+                            if (isSelf && member.status == AtaPotifyConstants.STATUS_PENDING) {
+                                Button(
+                                    onClick = onUploadSlipClick,
+                                    enabled = !isBusy,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("upload_slip_button"),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = SpotifyEmerald,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.UploadFile,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.btn_upload_slip))
                                 }
-                            )
+                            }
+
+                            if (isSelf && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                                OutlinedButton(
+                                    onClick = onUploadSlipClick,
+                                    enabled = !isBusy,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("replace_slip_button"),
+                                    border = BorderStroke(1.dp, BorderSubtle),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Text(stringResource(R.string.btn_replace_slip))
+                                }
+                            }
+
+                            if ((isSelf || isAdmin) && member.hasReceipt) {
+                                FilledTonalButton(
+                                    onClick = onViewSlipClick,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("view_slip_${member.memberKey}"),
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                                            AmberContainer
+                                        } else {
+                                            SurfaceHighest
+                                        },
+                                        contentColor = if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                                            AmberWarning
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(17.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        if (isAdmin && member.status == AtaPotifyConstants.STATUS_VERIFYING) {
+                                            stringResource(R.string.btn_review_slip)
+                                        } else {
+                                            stringResource(R.string.btn_view_slip)
+                                        }
+                                    )
+                                }
+                            }
+
+                            if (isAdmin && member.status == AtaPotifyConstants.STATUS_PENDING) {
+                                OutlinedButton(
+                                    onClick = onRemindClick,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("remind_${member.memberKey}"),
+                                    border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.5f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Send,
+                                        contentDescription = null,
+                                        tint = AmberWarning,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.btn_remind), color = AmberWarning)
+                                }
+                            }
+
+                            if (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID) {
+                                FilledTonalButton(
+                                    onClick = onMarkPaidClick,
+                                    enabled = !isBusy,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("mark_paid_${member.memberKey}"),
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = EmeraldContainer,
+                                        contentColor = SpotifyEmerald,
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.btn_mark_paid))
+                                }
+                            }
+
+                            if (isAdmin && member.status == AtaPotifyConstants.STATUS_PAID) {
+                                OutlinedButton(
+                                    onClick = onRewindPaidClick,
+                                    enabled = !isBusy,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("rewind_paid_${member.memberKey}"),
+                                    border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.5f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                                        contentDescription = null,
+                                        tint = AmberWarning,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.btn_rewind_paid), color = AmberWarning)
+                                }
+                            }
                         }
                     }
 
-                    if (isAdmin && member.status == AtaPotifyConstants.STATUS_PENDING) {
-                        OutlinedButton(
-                            onClick = onRemindClick,
-                            modifier = Modifier
-                                .weight(1f)
-                                .minimumInteractiveComponentSize()
-                                .testTag("remind_${member.memberKey}"),
-                            border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.5f)),
-                            shape = RoundedCornerShape(12.dp),
+                    if (isAdmin) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Send,
-                                contentDescription = null,
-                                tint = AmberWarning,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.btn_remind), color = AmberWarning)
-                        }
+                            OutlinedButton(
+                                onClick = onEditPaymentClick,
+                                enabled = !isBusy,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("edit_payment_${member.memberKey}"),
+                                border = BorderStroke(1.dp, BorderSubtle),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = stringResource(R.string.cd_edit_payment),
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.btn_edit_payment), color = MaterialTheme.colorScheme.onSurface)
+                            }
 
-                        FilledTonalButton(
-                            onClick = onMarkPaidClick,
-                            enabled = !isBusy,
-                            modifier = Modifier
-                                .weight(1f)
-                                .minimumInteractiveComponentSize()
-                                .testTag("mark_paid_${member.memberKey}"),
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = EmeraldContainer,
-                                contentColor = SpotifyEmerald,
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.btn_mark_paid))
+                            OutlinedButton(
+                                onClick = onDeletePaymentClick,
+                                enabled = !isBusy,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("delete_payment_${member.memberKey}"),
+                                border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.45f)),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteOutline,
+                                    contentDescription = stringResource(R.string.cd_remove_payment),
+                                    tint = CoralPending,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.btn_remove_payment), color = CoralPending)
+                            }
                         }
                     }
                 }
@@ -845,9 +1257,9 @@ private fun SpotifyConnectCard(
                         text = if (!isConfigured) {
                             "Add SPOTIFY_CLIENT_ID in AI Studio Secrets to enable Spotify login."
                         } else if (isConnected) {
-                            "Tap Sync Stats to add your recent listening minutes to this month's leaderboard."
+                            "Auto-syncs hourly in background & on open (accumulates plays + 4-week Top Artist/Track). Tap Sync Stats anytime."
                         } else {
-                            "See how much value you get out of your monthly LKR split."
+                            "Connect Spotify for hourly background sync, listening minutes, and Leaderboard ranking."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
@@ -883,22 +1295,68 @@ private fun SpotifyConnectCard(
     }
 }
 
+internal fun buildLeaderboardRoster(
+    syncedStats: List<ListeningStat>,
+    monthMembers: List<MemberPaymentStatus>,
+    adminDisplayName: String,
+    session: AccessResolution.Authorized,
+): List<ListeningStat> {
+    val byKey = syncedStats.associateBy { it.memberKey }.toMutableMap()
+    val adminKey = AtaPotifyConstants.memberKeyForEmail(AtaPotifyConstants.ADMIN_EMAIL)
+    if (!byKey.containsKey(adminKey)) {
+        val resolvedAdminName = if (session.isAdmin && session.displayName.isNotBlank()) {
+            session.displayName
+        } else {
+            adminDisplayName.ifBlank { "Admin" }
+        }
+        byKey[adminKey] = ListeningStat(
+            memberKey = adminKey,
+            memberEmail = AtaPotifyConstants.ADMIN_EMAIL,
+            displayName = resolvedAdminName,
+            minutesListened = 0L,
+            tracksCounted = 0L,
+        )
+    }
+    for (member in monthMembers) {
+        if (!byKey.containsKey(member.memberKey)) {
+            byKey[member.memberKey] = ListeningStat(
+                memberKey = member.memberKey,
+                memberEmail = member.memberEmail,
+                displayName = member.displayName,
+                minutesListened = 0L,
+                tracksCounted = 0L,
+            )
+        }
+    }
+    return byKey.values.sortedWith(
+        compareByDescending<ListeningStat> { it.minutesListened }
+            .thenByDescending { it.tracksCounted }
+            .thenBy { it.displayName.lowercase() }
+    )
+}
+
 @Composable
 fun ListeningLeaderboardCard(
     rank: Int,
     stat: ListeningStat,
     amountLkr: Long,
     isSelf: Boolean,
+    isAdminEntry: Boolean = false,
 ) {
     val hours = stat.minutesListened / 60.0
     val costPerHour = if (hours >= 0.1) (amountLkr / hours).toInt() else null
+    val hasSynced = stat.syncedAt != null || stat.minutesListened > 0L || stat.tracksCounted > 0L
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+        colors = CardDefaults.cardColors(containerColor = if (isSelf) SurfaceElevated else SurfaceDark),
         border = BorderStroke(
             1.dp,
-            if (rank == 1) SpotifyEmerald.copy(alpha = 0.5f) else BorderSubtle,
+            when {
+                rank == 1 && hasSynced -> SpotifyEmerald.copy(alpha = 0.55f)
+                isSelf -> SpotifyEmerald.copy(alpha = 0.35f)
+                else -> BorderSubtle
+            },
         ),
         shape = RoundedCornerShape(16.dp),
     ) {
@@ -913,23 +1371,43 @@ fun ListeningLeaderboardCard(
                 modifier = Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(if (rank == 1) EmeraldContainer else SurfaceHighest),
+                    .background(if (rank == 1 && hasSynced) EmeraldContainer else SurfaceHighest),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = "#$rank",
                     style = MonoNumericSmall,
-                    color = if (rank == 1) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
+                    color = if (rank == 1 && hasSynced) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
                 )
             }
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stat.displayName + if (isSelf) " (You)" else "",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = stat.displayName + if (isSelf) " (You)" else "",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (isAdminEntry) {
+                        Surface(
+                            color = EmeraldContainer,
+                            shape = RoundedCornerShape(6.dp),
+                        ) {
+                            Text(
+                                text = "Admin",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SpotifyEmerald,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                }
                 if (stat.topArtist.isNotBlank()) {
                     Text(
                         text = "Top artist: ${stat.topArtist}",
@@ -937,6 +1415,12 @@ fun ListeningLeaderboardCard(
                         color = TextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                } else if (!hasSynced) {
+                    Text(
+                        text = if (isSelf) "Tap Connect / Sync Spotify above" else "Waiting for Spotify sync",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
                     )
                 }
                 if (stat.topTrack.isNotBlank()) {
@@ -954,10 +1438,14 @@ fun ListeningLeaderboardCard(
                 Text(
                     text = "${stat.minutesListened} min",
                     style = MonoNumericLarge.copy(fontSize = 18.sp),
-                    color = SpotifyEmerald,
+                    color = if (hasSynced) SpotifyEmerald else TextSecondary,
                 )
                 Text(
-                    text = if (costPerHour != null) "LKR $costPerHour/hr" else "${stat.tracksCounted} tracks",
+                    text = when {
+                        costPerHour != null -> "LKR $costPerHour/hr"
+                        hasSynced -> "${stat.tracksCounted} tracks"
+                        else -> "Not synced"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = TextSecondary,
                 )

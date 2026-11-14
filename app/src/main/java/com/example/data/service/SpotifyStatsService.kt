@@ -106,6 +106,29 @@ class SpotifyStatsService(context: Context) {
         }
     }
 
+    fun lastSyncedAtMillis(monthId: String): Long =
+        prefs.getLong("$KEY_LAST_SYNC_PREFIX$monthId", 0L)
+
+    fun shouldAutoSync(monthId: String, minIntervalMs: Long = AUTO_SYNC_INTERVAL_MS): Boolean {
+        if (!isClientIdConfigured || !isConnected) return false
+        val last = lastSyncedAtMillis(monthId)
+        return System.currentTimeMillis() - last >= minIntervalMs
+    }
+
+    fun ensureMonthBaselineFromRemote(monthId: String, remoteMinutes: Long, remoteTracks: Long) {
+        val minutesKey = "minutes_ms_$monthId"
+        val tracksKey = "tracks_count_$monthId"
+        val currentMs = prefs.getLong(minutesKey, 0L)
+        val currentTracks = prefs.getLong(tracksKey, 0L)
+        val remoteMs = remoteMinutes.coerceAtLeast(0L) * 60_000L
+        if (remoteMs > currentMs || remoteTracks > currentTracks) {
+            prefs.edit()
+                .putLong(minutesKey, maxOf(currentMs, remoteMs))
+                .putLong(tracksKey, maxOf(currentTracks, remoteTracks))
+                .apply()
+        }
+    }
+
     suspend fun fetchAndAccumulateMonthlyStats(monthId: String): Result<SpotifyMonthlySnapshot> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -143,9 +166,10 @@ class SpotifyStatsService(context: Context) {
                 }
 
                 prefs.edit()
-                    .putStringSet(seenKey, existingSeen)
+                    .putStringSet(seenKey, existingSeen.toSet())
                     .putLong(minutesKey, totalDurationMs)
                     .putLong(tracksKey, totalTracks)
+                    .putLong("$KEY_LAST_SYNC_PREFIX$monthId", System.currentTimeMillis())
                     .apply()
 
                 val topArtistsJson = runCatching {
@@ -297,6 +321,8 @@ class SpotifyStatsService(context: Context) {
         const val KEY_CODE_VERIFIER = "code_verifier"
         const val KEY_OAUTH_STATE = "oauth_state"
         const val KEY_SPOTIFY_NAME = "spotify_name"
+        const val KEY_LAST_SYNC_PREFIX = "last_sync_at_ms_"
+        const val AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000L
 
         const val REDIRECT_URI = "atapotify://spotify-callback"
         const val SCOPES = "user-read-recently-played user-top-read user-read-private"

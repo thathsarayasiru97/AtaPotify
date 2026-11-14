@@ -16,8 +16,9 @@ import org.junit.Test
 class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
     private fun uniqueMonthId(): String {
+        val year = (2100..9999).random()
         val num = (10..99).random()
-        return "2099-$num"
+        return "$year-$num"
     }
 
     private suspend fun <T> step(name: String, block: suspend () -> T): T {
@@ -111,7 +112,7 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
                     tracksCounted = 60L,
                     topArtist = "Coldplay",
                     topTrack = "Yellow",
-                    allowedEmails = listOf(friendEmail),
+                    allowedEmails = listOf(friendEmail, AtaPotifyConstants.ADMIN_EMAIL),
                 ).getOrThrow()
             }
         } catch (e: Throwable) {
@@ -132,6 +133,101 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
                 .first { list -> list.any { it.memberKey == friendKey && it.status == AtaPotifyConstants.STATUS_PAID } }
         }
         assertEquals("Kasun Perera", entries.first { it.memberKey == friendKey }.displayName)
+
+        // Admin can also sync own Spotify listening stats
+        step("admin syncListeningStats") {
+            paymentRepo.syncListeningStats(
+                monthId = monthId,
+                memberKey = AtaPotifyConstants.memberKeyForEmail(AtaPotifyConstants.ADMIN_EMAIL),
+                memberEmail = AtaPotifyConstants.ADMIN_EMAIL,
+                displayName = "Thathsara",
+                spotifyDisplayName = "Thathsara Spotify",
+                minutesListened = 310L,
+                tracksCounted = 72L,
+                topArtist = "Daft Punk",
+                topTrack = "Get Lucky",
+                allowedEmails = listOf(friendEmail, AtaPotifyConstants.ADMIN_EMAIL),
+            ).getOrThrow()
+        }
+
+        // Admin rewinds Paid back to Verifying (clears confirmedAt)
+        step("admin rewindPayment") {
+            paymentRepo.rewindPayment(
+                monthId = monthId,
+                memberKey = friendKey,
+                targetStatus = AtaPotifyConstants.STATUS_VERIFYING,
+            ).getOrThrow()
+        }
+
+        val rewoundEntry = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.status == AtaPotifyConstants.STATUS_VERIFYING } }
+                .first { it.memberKey == friendKey }
+        }
+        assertEquals(null, rewoundEntry.confirmedAt)
+
+        // Admin edits payment log (custom amount, name, clear receipt, back to pending)
+        step("admin editMemberPayment") {
+            paymentRepo.editMemberPayment(
+                monthId = monthId,
+                member = rewoundEntry,
+                newDisplayName = "Kasun P.",
+                newStatus = AtaPotifyConstants.STATUS_PENDING,
+                newAmountLkr = 500L,
+                clearReceipt = true,
+                resetReminders = false,
+            ).getOrThrow()
+        }
+
+        val editedEntry = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.amountLkr == 500L } }
+                .first { it.memberKey == friendKey }
+        }
+        assertEquals("Kasun P.", editedEntry.displayName)
+        assertEquals(false, editedEntry.hasReceipt)
+        assertEquals(AtaPotifyConstants.STATUS_PENDING, editedEntry.status)
+
+        // Admin removes pending entry from month, then adds a member, then deletes the test month
+        step("admin deleteMemberPayment") {
+            paymentRepo.deleteMemberPayment(
+                monthId = monthId,
+                member = editedEntry,
+                allMonthMembers = listOf(editedEntry),
+            ).getOrThrow()
+        }
+
+        val monthSnap = withTimeout(TIMEOUT_MS) {
+            paymentRepo.observePaymentMonths(AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.monthId == monthId } }
+                .first { it.monthId == monthId }
+        }
+
+        step("admin addMemberToMonth") {
+            paymentRepo.addMemberToMonth(
+                month = monthSnap,
+                existingMembers = emptyList(),
+                email = friendEmail,
+                displayName = "Kasun Readded",
+                amountLkr = 480L,
+            ).getOrThrow()
+        }
+
+        val monthMembers = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey } }
+        }
+        val monthStats = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthStats(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true).first()
+        }
+
+        step("admin deleteBillingMonth") {
+            paymentRepo.deleteBillingMonth(
+                monthId = monthId,
+                memberKeys = monthMembers.map { it.memberKey },
+                statKeys = monthStats.map { it.memberKey },
+            ).getOrThrow()
+        }
     }
 
     @Test

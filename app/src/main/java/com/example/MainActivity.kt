@@ -51,6 +51,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,21 +70,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.ListeningStat
+import com.example.data.model.MemberPaymentStatus
+import com.example.data.model.PaymentMonth
 import com.example.data.model.WhitelistMember
 import com.example.data.repository.AccessResolution
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.PaymentRepository
 import com.example.data.repository.authStateFlow
 import com.example.data.service.SpotifyStatsService
+import com.example.data.worker.SpotifySyncScheduler
 import com.example.ui.screens.AccessDeniedScreen
+import com.example.ui.screens.AddMemberToMonthDialog
 import com.example.ui.screens.AdminScreen
+import com.example.ui.screens.AppUpdateAvailableDialog
 import com.example.ui.screens.AutoReminderQueueSheet
 import com.example.ui.screens.BoardScreen
+import com.example.ui.screens.ConfirmDeleteDialog
+import com.example.ui.screens.EditPaymentDialog
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.LoadingGateScreen
 import com.example.ui.screens.ProfileEditorSheet
@@ -96,7 +108,6 @@ import com.example.ui.screens.attemptAutoSignIn
 import com.example.ui.screens.signOutFromApp
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.AtaPotifyTheme
-import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.ObsidianBg
 import com.example.ui.theme.SpotifyEmerald
@@ -167,6 +178,7 @@ class MainActivity : ComponentActivity() {
                         pendingSpotifyUri = pendingCallbackUri,
                         onConsumeSpotifyUri = { pendingSpotifyCallback.value = null },
                         onSignOut = {
+                            SpotifySyncScheduler.cancelPeriodicSync(context)
                             signOutFromApp(
                                 credentialManager = credentialManager,
                                 scope = scope,
@@ -252,6 +264,7 @@ private fun AuthGatedHost(
                     @Suppress("UNCHECKED_CAST")
                     override fun <T : ViewModel> create(modelClass: Class<T>): T {
                         return AtaPotifyViewModel(
+                            appContext = appContext,
                             authRepository = authRepository,
                             paymentRepository = paymentRepository,
                             spotifyService = spotifyService,
@@ -300,6 +313,7 @@ private fun MainAppScaffold(
     val showAutoReminderSheet by viewModel.showAutoReminderSheet.collectAsStateWithLifecycle()
     val spotifyConnected by viewModel.spotifyConnected.collectAsStateWithLifecycle()
     val spotifyName by viewModel.spotifyName.collectAsStateWithLifecycle()
+    val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.BOARD) }
     var showProfileSheet by remember { mutableStateOf(false) }
@@ -307,6 +321,21 @@ private fun MainAppScaffold(
     var showSpotifyHintDialog by remember { mutableStateOf(false) }
     var showWhitelistDialog by remember { mutableStateOf(false) }
     var editingWhitelistMember by remember { mutableStateOf<WhitelistMember?>(null) }
+    var editingPaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
+    var deletingPaymentContext by remember { mutableStateOf<Triple<PaymentMonth, MemberPaymentStatus, List<MemberPaymentStatus>>?>(null) }
+    var addMemberTargetContext by remember { mutableStateOf<Pair<PaymentMonth, List<MemberPaymentStatus>>?>(null) }
+    var deletingMonthContext by remember { mutableStateOf<Triple<PaymentMonth, List<MemberPaymentStatus>, List<ListeningStat>>?>(null) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.autoSyncSpotifyOnResume()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val tabs = remember(session.isAdmin) {
         if (session.isAdmin) listOf(AppTab.BOARD, AppTab.HISTORY, AppTab.ADMIN)
@@ -337,6 +366,7 @@ private fun MainAppScaffold(
     }
 
     val effectiveDisplayName = userProfile?.displayName?.takeIf { it.isNotBlank() } ?: session.displayName
+    val adminDisplayName = if (session.isAdmin) effectiveDisplayName else "Admin"
     val phoneByKey = remember(whitelist) { whitelist.associate { it.memberKey to it.phone } }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -508,6 +538,7 @@ private fun MainAppScaffold(
                     when (selectedTab) {
                         AppTab.BOARD -> BoardScreen(
                             session = session,
+                            adminDisplayName = adminDisplayName,
                             currentMonth = currentMonth,
                             members = currentMonthMembers,
                             stats = currentMonthStats,
@@ -519,6 +550,16 @@ private fun MainAppScaffold(
                             isSpotifyClientConfigured = viewModel.isSpotifyClientConfigured,
                             isBusy = isBusy,
                             onOpenStartMonth = { showStartMonthDialog = true },
+                            onOpenAddMemberToMonth = {
+                                currentMonth?.let { month ->
+                                    addMemberTargetContext = month to currentMonthMembers
+                                }
+                            },
+                            onDeleteCurrentMonth = {
+                                currentMonth?.let { month ->
+                                    deletingMonthContext = Triple(month, currentMonthMembers, currentMonthStats)
+                                }
+                            },
                             onUploadSlip = { uri, member ->
                                 currentMonth?.let { month ->
                                     viewModel.uploadReceiptSlip(context, uri, month.monthId, member)
@@ -534,6 +575,21 @@ private fun MainAppScaffold(
                                     viewModel.confirmMemberPayment(month.monthId, member.memberKey)
                                 }
                             },
+                            onRewindPaid = { member ->
+                                currentMonth?.let { month ->
+                                    viewModel.rewindMemberPayment(month.monthId, member)
+                                }
+                            },
+                            onEditPayment = { member ->
+                                currentMonth?.let { month ->
+                                    editingPaymentContext = month to member
+                                }
+                            },
+                            onDeletePayment = { member ->
+                                currentMonth?.let { month ->
+                                    deletingPaymentContext = Triple(month, member, currentMonthMembers)
+                                }
+                            },
                             onRemindMember = { member, phone ->
                                 currentMonth?.let { month ->
                                     viewModel.sendWhatsAppReminder(context, month, member, phone)
@@ -547,6 +603,7 @@ private fun MainAppScaffold(
 
                         AppTab.HISTORY -> HistoryScreen(
                             session = session,
+                            adminDisplayName = adminDisplayName,
                             months = paymentMonths,
                             selectedMonth = selectedHistoryMonth,
                             members = historyMonthMembers,
@@ -554,6 +611,12 @@ private fun MainAppScaffold(
                             whitelist = whitelist,
                             isBusy = isBusy,
                             onSelectMonth = { viewModel.selectHistoryMonth(it) },
+                            onOpenAddMemberToMonth = { month ->
+                                addMemberTargetContext = month to historyMonthMembers
+                            },
+                            onDeleteMonth = { month ->
+                                deletingMonthContext = Triple(month, historyMonthMembers, historyMonthStats)
+                            },
                             onViewSlip = { member ->
                                 selectedHistoryMonth?.let { month ->
                                     viewModel.openReceiptViewer(month.monthId, member)
@@ -562,6 +625,21 @@ private fun MainAppScaffold(
                             onConfirmPaid = { member ->
                                 selectedHistoryMonth?.let { month ->
                                     viewModel.confirmMemberPayment(month.monthId, member.memberKey)
+                                }
+                            },
+                            onRewindPaid = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    viewModel.rewindMemberPayment(month.monthId, member)
+                                }
+                            },
+                            onEditPayment = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    editingPaymentContext = month to member
+                                }
+                            },
+                            onDeletePayment = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    deletingPaymentContext = Triple(month, member, historyMonthMembers)
                                 }
                             },
                             onRemindMember = { member, phone ->
@@ -619,6 +697,7 @@ private fun MainAppScaffold(
                 }
             },
             onDisconnectSpotify = { viewModel.disconnectSpotify() },
+            onCheckForUpdates = { viewModel.checkForAppUpdate(manual = true) },
             onSignOut = {
                 showProfileSheet = false
                 onSignOut()
@@ -637,6 +716,9 @@ private fun MainAppScaffold(
             },
             onRejectToPending = {
                 viewModel.rejectMemberPayment(dialogState.monthId, dialogState.member.memberKey)
+            },
+            onRewindPaid = {
+                viewModel.rewindMemberPayment(dialogState.monthId, dialogState.member)
             },
             onDismiss = { viewModel.closeReceiptViewer() },
         )
@@ -701,7 +783,101 @@ private fun MainAppScaffold(
         )
     }
 
+    editingPaymentContext?.let { (month, member) ->
+        if (session.isAdmin) {
+            EditPaymentDialog(
+                member = member,
+                monthLabel = month.displayLabel,
+                isBusy = isBusy,
+                onSave = { displayName, status, amountLkr, clearReceipt, resetReminders ->
+                    viewModel.editMemberPayment(
+                        monthId = month.monthId,
+                        member = member,
+                        displayName = displayName,
+                        status = status,
+                        amountLkr = amountLkr,
+                        clearReceipt = clearReceipt,
+                        resetReminders = resetReminders,
+                        onDone = { editingPaymentContext = null },
+                    )
+                },
+                onDismiss = { editingPaymentContext = null },
+            )
+        }
+    }
+
+    addMemberTargetContext?.let { (month, existingMembers) ->
+        if (session.isAdmin) {
+            AddMemberToMonthDialog(
+                month = month,
+                existingMembers = existingMembers,
+                whitelist = whitelist,
+                adminDisplayName = adminDisplayName,
+                isBusy = isBusy,
+                onAdd = { email, displayName, amountLkr ->
+                    viewModel.addMemberToMonth(
+                        month = month,
+                        existingMembers = existingMembers,
+                        email = email,
+                        displayName = displayName,
+                        amountLkr = amountLkr,
+                        onDone = { addMemberTargetContext = null },
+                    )
+                },
+                onDismiss = { addMemberTargetContext = null },
+            )
+        }
+    }
+
+    deletingPaymentContext?.let { (month, member, monthMembers) ->
+        if (session.isAdmin) {
+            ConfirmDeleteDialog(
+                title = "Remove Payment Entry?",
+                message = "Remove ${member.displayName} (${member.status.replaceFirstChar { it.uppercase() }}) from ${month.displayLabel}? Any uploaded slip for this entry will also be deleted.",
+                confirmLabel = stringResource(R.string.btn_remove_payment),
+                isBusy = isBusy,
+                onConfirm = {
+                    viewModel.deleteMemberPayment(
+                        monthId = month.monthId,
+                        member = member,
+                        monthMembers = monthMembers,
+                        onDone = { deletingPaymentContext = null },
+                    )
+                },
+                onDismiss = { deletingPaymentContext = null },
+            )
+        }
+    }
+
+    deletingMonthContext?.let { (month, members, stats) ->
+        if (session.isAdmin) {
+            ConfirmDeleteDialog(
+                title = "Delete Billing Month?",
+                message = "Permanently delete ${month.displayLabel} and all ${members.size} payment log(s) and receipts inside it?",
+                confirmLabel = stringResource(R.string.btn_delete_month),
+                isBusy = isBusy,
+                onConfirm = {
+                    viewModel.deleteBillingMonth(
+                        month = month,
+                        members = members,
+                        stats = stats,
+                        onDone = { deletingMonthContext = null },
+                    )
+                },
+                onDismiss = { deletingMonthContext = null },
+            )
+        }
+    }
+
     if (showSpotifyHintDialog) {
         SpotifySetupHintDialog(onDismiss = { showSpotifyHintDialog = false })
+    }
+
+    availableUpdate?.let { release ->
+        AppUpdateAvailableDialog(
+            release = release,
+            onDownload = { viewModel.downloadAppUpdate(context, release) },
+            onDismiss = { viewModel.dismissAvailableUpdate() },
+        )
     }
 }

@@ -173,3 +173,69 @@ data class ListeningStat(
     val allowedEmails: List<String> = emptyList(),
     @ServerTimestamp val syncedAt: Timestamp? = null,
 )
+
+data class MonthlyBillingSummary(
+    val expectedTotalLkr: Long,
+    val collectedLkr: Long,
+    val pendingOnlyLkr: Long,
+    val verifyingLkr: Long,
+    val totalPendingLkr: Long,
+    val netBalanceLkr: Long,
+    val paidCount: Int,
+    val verifyingCount: Int,
+    val pendingCount: Int,
+    val totalCount: Int,
+    val collectionFraction: Float,
+)
+
+fun calculateMonthlyBillingSummary(members: List<MemberPaymentStatus>): MonthlyBillingSummary {
+    var expectedTotal = 0L
+    var collected = 0L
+    var pendingOnly = 0L
+    var verifying = 0L
+    var paidCount = 0
+    var verifyingCount = 0
+    var pendingCount = 0
+
+    for (member in members) {
+        val amount = member.amountLkr.coerceAtLeast(0L)
+        expectedTotal += amount
+        when (member.status) {
+            AtaPotifyConstants.STATUS_PAID -> {
+                collected += amount
+                paidCount++
+            }
+            AtaPotifyConstants.STATUS_VERIFYING -> {
+                verifying += amount
+                verifyingCount++
+            }
+            else -> {
+                pendingOnly += amount
+                pendingCount++
+            }
+        }
+    }
+
+    val totalPending = pendingOnly + verifying
+    val netBalance = collected - expectedTotal
+    val fraction = if (expectedTotal > 0L) {
+        (collected.toFloat() / expectedTotal.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    return MonthlyBillingSummary(
+        expectedTotalLkr = expectedTotal,
+        collectedLkr = collected,
+        pendingOnlyLkr = pendingOnly,
+        verifyingLkr = verifying,
+        totalPendingLkr = totalPending,
+        netBalanceLkr = netBalance,
+        paidCount = paidCount,
+        verifyingCount = verifyingCount,
+        pendingCount = pendingCount,
+        totalCount = members.size,
+        collectionFraction = fraction,
+    )
+}
+

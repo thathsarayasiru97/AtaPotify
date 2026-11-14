@@ -284,6 +284,253 @@ class PaymentRepository(
         }
     }
 
+    suspend fun rewindPayment(
+        monthId: String,
+        memberKey: String,
+        targetStatus: String,
+    ): Result<Unit> {
+        requireUserId()
+        val safeStatus = when (targetStatus) {
+            AtaPotifyConstants.STATUS_VERIFYING -> AtaPotifyConstants.STATUS_VERIFYING
+            else -> AtaPotifyConstants.STATUS_PENDING
+        }
+        val ref = db.collection("payments").document(monthId)
+            .collection("members").document(memberKey)
+        return try {
+            ref.update(
+                mapOf(
+                    "status" to safeStatus,
+                    "confirmedAt" to FieldValue.delete(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun editMemberPayment(
+        monthId: String,
+        member: MemberPaymentStatus,
+        newDisplayName: String,
+        newStatus: String,
+        newAmountLkr: Long,
+        clearReceipt: Boolean,
+        resetReminders: Boolean,
+    ): Result<Unit> {
+        requireUserId()
+        val cleanName = newDisplayName.trim().take(60)
+        require(cleanName.isNotEmpty()) { "Display name cannot be blank" }
+        require(newAmountLkr in 1..100_000) { "Amount must be between 1 and 100,000 LKR" }
+        require(
+            newStatus in listOf(
+                AtaPotifyConstants.STATUS_PENDING,
+                AtaPotifyConstants.STATUS_VERIFYING,
+                AtaPotifyConstants.STATUS_PAID,
+            )
+        ) { "Invalid payment status" }
+
+        val memberRef = db.collection("payments").document(monthId)
+            .collection("members").document(member.memberKey)
+        val slipRef = memberRef.collection("private").document(AtaPotifyConstants.SLIP_DOC_ID)
+
+        val updates = mutableMapOf<String, Any>(
+            "displayName" to cleanName,
+            "status" to newStatus,
+            "amountLkr" to newAmountLkr,
+            "updatedAt" to FieldValue.serverTimestamp(),
+        )
+
+        if (clearReceipt) {
+            updates["hasReceipt"] = false
+        }
+        if (resetReminders) {
+            updates["reminderCount"] = 0L
+            updates["lastRemindedAt"] = FieldValue.delete()
+        }
+        if (newStatus == AtaPotifyConstants.STATUS_PAID) {
+            if (member.confirmedAt == null) {
+                updates["confirmedAt"] = FieldValue.serverTimestamp()
+            }
+        } else if (member.confirmedAt != null || member.status == AtaPotifyConstants.STATUS_PAID) {
+            updates["confirmedAt"] = FieldValue.delete()
+        }
+
+        val batch = db.batch()
+        batch.update(memberRef, updates)
+        if (clearReceipt && member.hasReceipt) {
+            batch.delete(slipRef)
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, memberRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteMemberPayment(
+        monthId: String,
+        member: MemberPaymentStatus,
+        allMonthMembers: List<MemberPaymentStatus>,
+    ): Result<Unit> {
+        requireUserId()
+        val remaining = allMonthMembers.filter { it.memberKey != member.memberKey }
+        val updatedAllowedEmails = (remaining.map { AtaPotifyConstants.normalizeEmail(it.memberEmail) } +
+            AtaPotifyConstants.ADMIN_EMAIL).distinct().take(25)
+
+        val monthRef = db.collection("payments").document(monthId)
+        val targetRef = monthRef.collection("members").document(member.memberKey)
+        val slipRef = targetRef.collection("private").document(AtaPotifyConstants.SLIP_DOC_ID)
+
+        val batch = db.batch()
+        batch.delete(slipRef)
+        batch.delete(targetRef)
+        batch.update(
+            monthRef,
+            mapOf(
+                "allowedEmails" to updatedAllowedEmails,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        )
+        for (other in remaining) {
+            batch.update(
+                monthRef.collection("members").document(other.memberKey),
+                mapOf(
+                    "allowedEmails" to updatedAllowedEmails,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, targetRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun addMemberToMonth(
+        month: PaymentMonth,
+        existingMembers: List<MemberPaymentStatus>,
+        email: String,
+        displayName: String,
+        amountLkr: Long,
+    ): Result<Unit> {
+        requireUserId()
+        val emailLower = AtaPotifyConstants.normalizeEmail(email)
+        require(emailLower.contains("@") && emailLower.length in 3..160) { "Invalid email" }
+        val cleanName = displayName.trim().take(60)
+        require(cleanName.isNotEmpty()) { "Name cannot be blank" }
+        require(amountLkr in 1..100_000) { "Amount must be between 1 and 100,000 LKR" }
+
+        val memberKey = AtaPotifyConstants.memberKeyForEmail(emailLower)
+        val mergedEmails = (month.allowedEmails + existingMembers.map { AtaPotifyConstants.normalizeEmail(it.memberEmail) } +
+            emailLower + AtaPotifyConstants.ADMIN_EMAIL).distinct().take(25)
+
+        val monthRef = db.collection("payments").document(month.monthId)
+        val memberRef = monthRef.collection("members").document(memberKey)
+        val batch = db.batch()
+
+        batch.update(
+            monthRef,
+            mapOf(
+                "allowedEmails" to mergedEmails,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        )
+        for (other in existingMembers) {
+            if (other.memberKey != memberKey) {
+                batch.update(
+                    monthRef.collection("members").document(other.memberKey),
+                    mapOf(
+                        "allowedEmails" to mergedEmails,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+            }
+        }
+        val existingEntry = existingMembers.firstOrNull { it.memberKey == memberKey }
+        if (existingEntry != null) {
+            batch.update(
+                memberRef,
+                mapOf(
+                    "displayName" to cleanName,
+                    "amountLkr" to amountLkr,
+                    "allowedEmails" to mergedEmails,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        } else {
+            batch.set(
+                memberRef,
+                mapOf(
+                    "memberKey" to memberKey,
+                    "memberEmail" to emailLower,
+                    "displayName" to cleanName,
+                    "status" to AtaPotifyConstants.STATUS_PENDING,
+                    "amountLkr" to amountLkr,
+                    "hasReceipt" to false,
+                    "allowedEmails" to mergedEmails,
+                    "reminderCount" to 0L,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, memberRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteBillingMonth(
+        monthId: String,
+        memberKeys: List<String>,
+        statKeys: List<String>,
+    ): Result<Unit> {
+        requireUserId()
+        val monthRef = db.collection("payments").document(monthId)
+        val batch = db.batch()
+        for (key in memberKeys) {
+            val memberRef = monthRef.collection("members").document(key)
+            batch.delete(memberRef.collection("private").document(AtaPotifyConstants.SLIP_DOC_ID))
+            batch.delete(memberRef)
+        }
+        for (key in statKeys) {
+            batch.delete(monthRef.collection("stats").document(key))
+        }
+        batch.delete(monthRef)
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, monthRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
     suspend fun recordWhatsAppReminder(
         monthId: String,
         memberKey: String,
@@ -319,7 +566,8 @@ class PaymentRepository(
         require(monthId.matches(Regex("^[0-9]{4}-[0-9]{2}$"))) { "Invalid month ID format (YYYY-MM)" }
         require(amountLkr in 1..100_000) { "Amount must be between 1 and 100,000 LKR" }
 
-        val allowedEmails = activeMembers.map { AtaPotifyConstants.normalizeEmail(it.email) }.distinct().take(25)
+        val allowedEmails = (activeMembers.map { AtaPotifyConstants.normalizeEmail(it.email) } +
+            AtaPotifyConstants.ADMIN_EMAIL).distinct().take(25)
         val monthRef = db.collection("payments").document(monthId)
         val batch = db.batch()
         batch.set(

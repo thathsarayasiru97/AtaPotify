@@ -18,8 +18,12 @@ import com.example.data.model.WhitelistMember
 import com.example.data.repository.AccessResolution
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.PaymentRepository
+import com.example.data.service.AppUpdateCheckResult
+import com.example.data.service.AppUpdateService
+import com.example.data.service.GitHubAppRelease
 import com.example.data.service.ImageCompressor
 import com.example.data.service.SpotifyStatsService
+import com.example.data.worker.SpotifySyncScheduler
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseUser
 import java.net.URLEncoder
@@ -97,6 +101,7 @@ class AuthGateViewModel(
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AtaPotifyViewModel(
+    private val appContext: Context,
     private val authRepository: AuthRepository,
     private val paymentRepository: PaymentRepository,
     private val spotifyService: SpotifyStatsService,
@@ -113,7 +118,12 @@ class AtaPotifyViewModel(
     private val _showAutoReminderSheet = MutableStateFlow(false)
     val showAutoReminderSheet: StateFlow<Boolean> = _showAutoReminderSheet.asStateFlow()
 
+    private val _availableUpdate = MutableStateFlow<GitHubAppRelease?>(null)
+    val availableUpdate: StateFlow<GitHubAppRelease?> = _availableUpdate.asStateFlow()
+
     private var hasAutoPromptedOverdueThisSession = false
+    private var hasCheckedUpdateThisSession = false
+    private val dismissedUpdateTags = mutableSetOf<String>()
 
     private val _spotifyConnected = MutableStateFlow(spotifyService.isConnected)
     val spotifyConnected: StateFlow<Boolean> = _spotifyConnected.asStateFlow()
@@ -260,6 +270,69 @@ class AtaPotifyViewModel(
                 }
             }
         }
+        if (spotifyService.isClientIdConfigured && spotifyService.isConnected) {
+            SpotifySyncScheduler.schedulePeriodicSync(appContext)
+        }
+        viewModelScope.launch {
+            currentMonth.collect { month ->
+                if (month != null && spotifyService.shouldAutoSync(month.monthId)) {
+                    syncSpotifyStats(silent = true)
+                }
+            }
+        }
+        checkForAppUpdate(manual = false)
+    }
+
+    fun checkForAppUpdate(manual: Boolean = false) {
+        if (!manual && hasCheckedUpdateThisSession) return
+        hasCheckedUpdateThisSession = true
+        viewModelScope.launch {
+            if (manual) _isBusy.value = true
+            val result = AppUpdateService.checkForLatestRelease()
+            if (manual) _isBusy.value = false
+            result.fold(
+                onSuccess = { outcome ->
+                    when (outcome) {
+                        is AppUpdateCheckResult.UpdateAvailable -> {
+                            if (manual || outcome.release.tagName !in dismissedUpdateTags) {
+                                _availableUpdate.value = outcome.release
+                            }
+                        }
+                        is AppUpdateCheckResult.UpToDate -> {
+                            if (manual) {
+                                _snackbarEvents.tryEmit("AtaPotify v${outcome.currentVersion} is up to date")
+                            }
+                        }
+                    }
+                },
+                onFailure = { error ->
+                    if (manual) {
+                        _snackbarEvents.tryEmit(error.localizedMessage ?: "Unable to check for updates")
+                    }
+                },
+            )
+        }
+    }
+
+    fun dismissAvailableUpdate() {
+        _availableUpdate.value?.tagName?.let { dismissedUpdateTags.add(it) }
+        _availableUpdate.value = null
+    }
+
+    fun downloadAppUpdate(context: Context, release: GitHubAppRelease) {
+        val launched = AppUpdateService.launchUpdateDownload(context, release)
+        if (launched) {
+            _availableUpdate.value = null
+        } else {
+            _snackbarEvents.tryEmit("Unable to open browser to download ${release.tagName}")
+        }
+    }
+
+    fun autoSyncSpotifyOnResume() {
+        val month = currentMonth.value ?: return
+        if (spotifyService.shouldAutoSync(month.monthId)) {
+            syncSpotifyStats(silent = true)
+        }
     }
 
     fun selectHistoryMonth(monthId: String) {
@@ -387,6 +460,148 @@ class AtaPotifyViewModel(
                 },
                 onFailure = { e ->
                     _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to reset payment")
+                },
+            )
+        }
+    }
+
+    fun rewindMemberPayment(monthId: String, member: MemberPaymentStatus) {
+        val targetStatus = if (member.hasReceipt) {
+            AtaPotifyConstants.STATUS_VERIFYING
+        } else {
+            AtaPotifyConstants.STATUS_PENDING
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.rewindPayment(monthId, member.memberKey, targetStatus)
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _receiptDialog.value = null
+                    val label = if (targetStatus == AtaPotifyConstants.STATUS_VERIFYING) "Verifying" else "Pending"
+                    _snackbarEvents.tryEmit("Rewound ${member.displayName}'s payment back to $label")
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to rewind payment")
+                },
+            )
+        }
+    }
+
+    fun editMemberPayment(
+        monthId: String,
+        member: MemberPaymentStatus,
+        displayName: String,
+        status: String,
+        amountLkr: Long,
+        clearReceipt: Boolean,
+        resetReminders: Boolean,
+        onDone: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.editMemberPayment(
+                monthId = monthId,
+                member = member,
+                newDisplayName = displayName,
+                newStatus = status,
+                newAmountLkr = amountLkr,
+                clearReceipt = clearReceipt,
+                resetReminders = resetReminders,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _snackbarEvents.tryEmit("Updated ${displayName.trim()}'s payment log")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to update payment log")
+                },
+            )
+        }
+    }
+
+    fun deleteMemberPayment(
+        monthId: String,
+        member: MemberPaymentStatus,
+        monthMembers: List<MemberPaymentStatus>,
+        onDone: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.deleteMemberPayment(
+                monthId = monthId,
+                member = member,
+                allMonthMembers = monthMembers,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _snackbarEvents.tryEmit("Removed ${member.displayName} from $monthId")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to remove payment entry")
+                },
+            )
+        }
+    }
+
+    fun addMemberToMonth(
+        month: PaymentMonth,
+        existingMembers: List<MemberPaymentStatus>,
+        email: String,
+        displayName: String,
+        amountLkr: Long,
+        onDone: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.addMemberToMonth(
+                month = month,
+                existingMembers = existingMembers,
+                email = email,
+                displayName = displayName,
+                amountLkr = amountLkr,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _snackbarEvents.tryEmit("Added $displayName to ${month.displayLabel}")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to add member to month")
+                },
+            )
+        }
+    }
+
+    fun deleteBillingMonth(
+        month: PaymentMonth,
+        members: List<MemberPaymentStatus>,
+        stats: List<ListeningStat>,
+        onDone: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.deleteBillingMonth(
+                monthId = month.monthId,
+                memberKeys = members.map { it.memberKey },
+                statKeys = stats.map { it.memberKey },
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    if (_selectedHistoryMonthId.value == month.monthId) {
+                        _selectedHistoryMonthId.value = null
+                    }
+                    _snackbarEvents.tryEmit("Deleted ${month.displayLabel}")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to delete billing month")
                 },
             )
         }
@@ -538,7 +753,8 @@ class AtaPotifyViewModel(
             tokenRes.fold(
                 onSuccess = {
                     _spotifyConnected.value = true
-                    _snackbarEvents.tryEmit("Spotify connected! Syncing your monthly stats...")
+                    SpotifySyncScheduler.schedulePeriodicSync(appContext)
+                    _snackbarEvents.tryEmit("Spotify connected! Background sync enabled & syncing stats...")
                     syncSpotifyStats()
                 },
                 onFailure = { e ->
@@ -548,14 +764,24 @@ class AtaPotifyViewModel(
         }
     }
 
-    fun syncSpotifyStats() {
+    fun syncSpotifyStats(silent: Boolean = false) {
         val month = currentMonth.value
         if (month == null) {
-            _snackbarEvents.tryEmit("No active billing month yet to attach listening stats.")
+            if (!silent) {
+                _snackbarEvents.tryEmit("No active billing month yet to attach listening stats.")
+            }
             return
         }
         viewModelScope.launch {
-            _isBusy.value = true
+            if (!silent) _isBusy.value = true
+            val existingRemoteStat = currentMonthStats.value.firstOrNull { it.memberKey == session.memberKey }
+            if (existingRemoteStat != null) {
+                spotifyService.ensureMonthBaselineFromRemote(
+                    monthId = month.monthId,
+                    remoteMinutes = existingRemoteStat.minutesListened,
+                    remoteTracks = existingRemoteStat.tracksCounted,
+                )
+            }
             val statsRes = spotifyService.fetchAndAccumulateMonthlyStats(month.monthId)
             statsRes.fold(
                 onSuccess = { snap ->
@@ -576,23 +802,30 @@ class AtaPotifyViewModel(
                     )
                     writeRes.fold(
                         onSuccess = {
-                            _snackbarEvents.tryEmit("Synced ${snap.minutesListened} min (${snap.tracksCounted} tracks) for ${month.displayLabel}")
+                            if (!silent) {
+                                _snackbarEvents.tryEmit("Synced ${snap.minutesListened} min (${snap.tracksCounted} tracks) for ${month.displayLabel}")
+                            }
                         },
                         onFailure = { e ->
-                            _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to save Spotify stats")
+                            if (!silent) {
+                                _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to save Spotify stats")
+                            }
                         },
                     )
                 },
                 onFailure = { e ->
-                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Unable to fetch Spotify stats")
+                    if (!silent) {
+                        _snackbarEvents.tryEmit(e.localizedMessage ?: "Unable to fetch Spotify stats")
+                    }
                 },
             )
-            _isBusy.value = false
+            if (!silent) _isBusy.value = false
         }
     }
 
     fun disconnectSpotify() {
         spotifyService.disconnect()
+        SpotifySyncScheduler.cancelPeriodicSync(appContext)
         _spotifyConnected.value = false
         _spotifyName.value = ""
         _snackbarEvents.tryEmit("Disconnected Spotify account on this device")

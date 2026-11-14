@@ -82,8 +82,8 @@ abstract class FirestoreEmulatorTestBase {
                 if (verified && !user.isEmailVerified) {
                     markEmailVerifiedInEmulator(user.uid)
                     user.reload().await()
-                    user.getIdToken(true).await()
                 }
+                user.getIdToken(true).await()
                 user.uid
             }
         }

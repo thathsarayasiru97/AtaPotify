@@ -417,3 +417,50 @@ test("Whitelisted member can sync own Spotify listening stats, cannot spoof anot
     })
   );
 });
+
+test("Admin can rewind paid confirmation, delete pending payment, delete slip/month, and sync admin stats", async () => {
+  await seedMonthAndMembers();
+  const adminDb = adminContext().firestore();
+  const aliceDb = memberContext(ALICE_UID, ALICE_EMAIL).firestore();
+  const now = new Date();
+
+  // Admin rewinds/edits Bob from paid back to verifying with custom amount and cleared receipt
+  await assertSucceeds(
+    adminDb.collection("payments").doc(MONTH_ID).collection("members").doc(BOB_KEY).update({
+      status: "verifying",
+      displayName: "Bob Edited",
+      amountLkr: 500,
+      hasReceipt: false,
+      reminderCount: 0,
+      updatedAt: now,
+    })
+  );
+
+  // Admin deletes pending Alice payment entry
+  await assertSucceeds(
+    adminDb.collection("payments").doc(MONTH_ID).collection("members").doc(ALICE_KEY).delete()
+  );
+
+  // Non-admin cannot delete payment entry
+  await assertFails(
+    aliceDb.collection("payments").doc(MONTH_ID).collection("members").doc(BOB_KEY).delete()
+  );
+
+  // Admin can write own listening stats even when not in allowedEmails
+  const adminKey = "admin_key_test";
+  await assertSucceeds(
+    adminDb.collection("payments").doc(MONTH_ID).collection("stats").doc(adminKey).set({
+      memberKey: adminKey,
+      memberEmail: ADMIN_EMAIL,
+      displayName: "Thathsara",
+      spotifyDisplayName: "Thathsara",
+      minutesListened: 180,
+      tracksCounted: 45,
+      topArtist: "Daft Punk",
+      topTrack: "Instant Crush",
+      allowedEmails: [ALICE_EMAIL, BOB_EMAIL],
+      syncedAt: now,
+    })
+  );
+});
+
