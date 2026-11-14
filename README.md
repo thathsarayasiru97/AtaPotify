@@ -198,7 +198,8 @@ The repository includes **`.github/workflows/release-apk.yml`**, which automatic
 1. In your GitHub repository, open **Settings → Secrets and variables → Actions** and add:
    - `GOOGLE_SERVICES_JSON` — paste the contents of your `app/google-services.json` (or `GOOGLE_SERVICES_JSON_BASE64` if base64-encoded), unless `app/google-services.json` is already committed.
    - `SPOTIFY_CLIENT_ID` — your Spotify Developer Client ID.
-   - *(Recommended for production signing)* `UPLOAD_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` matching `my-upload-key.jks` (`upload` alias). If omitted, the workflow falls back cleanly to `debug.keystore.base64` (or generates a temporary `debug.keystore` via `keytool`).
+   - `DEBUG_KEYSTORE_BASE64` — paste the contents of `debug.keystore.base64` from AI Studio so CI APKs share the exact same signing certificate (enabling in-place updates + Google Sign-In without uninstalling).
+   - *(Or for production release signing)* `UPLOAD_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` matching `my-upload-key.jks` (`upload` alias).
 2. Whenever you want friends to receive an in-app update prompt, bump `versionCode` + `versionName` in `app/build.gradle.kts` and push to `main` (or push tag `v<versionName>`). GitHub Actions creates/updates the release and attaches the latest `.apk` automatically.
 
 ---

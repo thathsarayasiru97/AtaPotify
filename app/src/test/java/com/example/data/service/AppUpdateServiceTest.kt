@@ -11,6 +11,7 @@ class AppUpdateServiceTest {
     fun `isRemoteVersionNewer detects major minor and patch increments`() {
         assertTrue(AppUpdateService.isRemoteVersionNewer("v1.0.1", "1.0"))
         assertTrue(AppUpdateService.isRemoteVersionNewer("v1.1.0", "1.0.9"))
+        assertTrue(AppUpdateService.isRemoteVersionNewer("v1.2", "1.1"))
         assertTrue(AppUpdateService.isRemoteVersionNewer("2.0", "1.9.9"))
         assertTrue(AppUpdateService.isRemoteVersionNewer("V1.2.0", "1.1"))
     }
@@ -18,6 +19,7 @@ class AppUpdateServiceTest {
     @Test
     fun `isRemoteVersionNewer ignores equal or older releases`() {
         assertFalse(AppUpdateService.isRemoteVersionNewer("v1.0", "1.0"))
+        assertFalse(AppUpdateService.isRemoteVersionNewer("v1.2", "1.2"))
         assertFalse(AppUpdateService.isRemoteVersionNewer("v1.0.0", "1.0"))
         assertFalse(AppUpdateService.isRemoteVersionNewer("v0.9.9", "1.0"))
         assertFalse(AppUpdateService.isRemoteVersionNewer("1.2.3", "1.2.4"))
