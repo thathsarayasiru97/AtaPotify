@@ -1,0 +1,340 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Helpers ---
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedSignedIn() {
+      return isSignedIn() &&
+        request.auth.token.email is string &&
+        request.auth.token.email_verified == true;
+    }
+
+    function callerEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedSignedIn() && callerEmail() == 'thathsarayasiru97@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin();
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidMonthId(monthId) {
+      return monthId is string && monthId.size() == 7 && monthId.matches('^[0-9]{4}-[0-9]{2}$');
+    }
+
+    function isValidAllowedEmails(list) {
+      return list is list &&
+        list.size() >= 0 &&
+        list.size() <= 25 &&
+        (list.size() == 0 || (list[0] is string && list[0].size() <= 160));
+    }
+
+    // --- Entity Validation Helpers ---
+
+    function isValidUserProfile(data) {
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+        data.role in ['admin', 'member'] &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 24)) &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPlanConfig(data) {
+      return data.planName is string && data.planName.size() >= 1 && data.planName.size() <= 60 &&
+        data.monthlyAmountLkr is int && data.monthlyAmountLkr >= 1 && data.monthlyAmountLkr <= 100000 &&
+        data.currency is string && data.currency == 'LKR' &&
+        isValidAllowedEmails(data.allowedEmails) &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidWhitelistMember(data) {
+      return isValidId(data.memberKey) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+        data.phone is string && data.phone.size() <= 24 &&
+        data.role == 'member' &&
+        data.active is bool &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPaymentMonth(data) {
+      return isValidMonthId(data.monthId) &&
+        data.displayLabel is string && data.displayLabel.size() >= 3 && data.displayLabel.size() <= 40 &&
+        data.amountLkr is int && data.amountLkr >= 1 && data.amountLkr <= 100000 &&
+        isValidAllowedEmails(data.allowedEmails) &&
+        data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidMemberPayment(data) {
+      return isValidId(data.memberKey) &&
+        data.memberEmail is string && data.memberEmail.size() >= 3 && data.memberEmail.size() <= 160 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+        data.status in ['pending', 'verifying', 'paid'] &&
+        data.amountLkr is int && data.amountLkr >= 1 && data.amountLkr <= 100000 &&
+        data.hasReceipt is bool &&
+        isValidAllowedEmails(data.allowedEmails) &&
+        data.reminderCount is int && data.reminderCount >= 0 && data.reminderCount <= 1000 &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time &&
+        (!('submittedAt' in data) || (data.submittedAt is timestamp && data.submittedAt <= request.time)) &&
+        (!('confirmedAt' in data) || (data.confirmedAt is timestamp && data.confirmedAt <= request.time)) &&
+        (!('lastRemindedAt' in data) || (data.lastRemindedAt is timestamp && data.lastRemindedAt <= request.time));
+    }
+
+    function isValidReceiptSlip(data) {
+      return data.memberEmail is string && data.memberEmail.size() >= 3 && data.memberEmail.size() <= 160 &&
+        data.uploadedByUid is string && data.uploadedByUid.size() >= 1 && data.uploadedByUid.size() <= 128 &&
+        data.mimeType in ['image/jpeg', 'image/webp', 'image/png'] &&
+        data.imageBase64 is string && data.imageBase64.size() >= 8 && data.imageBase64.size() <= 450000 &&
+        data.uploadedAt is timestamp && data.uploadedAt <= request.time;
+    }
+
+    function isValidListeningStat(data) {
+      return isValidId(data.memberKey) &&
+        data.memberEmail is string && data.memberEmail.size() >= 3 && data.memberEmail.size() <= 160 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+        (!('spotifyDisplayName' in data) || (data.spotifyDisplayName is string && data.spotifyDisplayName.size() <= 80)) &&
+        data.minutesListened is int && data.minutesListened >= 0 && data.minutesListened <= 50000 &&
+        data.tracksCounted is int && data.tracksCounted >= 0 && data.tracksCounted <= 20000 &&
+        (!('topArtist' in data) || (data.topArtist is string && data.topArtist.size() <= 100)) &&
+        (!('topTrack' in data) || (data.topTrack is string && data.topTrack.size() <= 120)) &&
+        isValidAllowedEmails(data.allowedEmails) &&
+        data.syncedAt is timestamp && data.syncedAt <= request.time;
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isVerifiedSignedIn() && isValidId(userId) && (isAdmin() || request.auth.uid == userId);
+      allow list: if isAdmin() || (isVerifiedSignedIn() && existing().uid == request.auth.uid);
+
+      allow create: if isVerifiedSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        incoming().keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['uid', 'email', 'displayName', 'role', 'phone', 'createdAt', 'updatedAt']) &&
+        incoming().uid == request.auth.uid &&
+        incoming().email == callerEmail() &&
+        ((isAdmin() && incoming().role == 'admin') || (!isAdmin() && incoming().role == 'member')) &&
+        isValidUserProfile(incoming());
+
+      allow update: if isVerifiedSignedIn() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (
+            request.auth.uid == userId &&
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    match /plan_config/{configId} {
+      allow get: if isValidId(configId) &&
+        (isAdmin() || (isVerifiedSignedIn() && callerEmail() in existing().allowedEmails));
+      allow list: if false;
+
+      allow create: if isAdmin() &&
+        configId == 'settings' &&
+        incoming().keys().hasAll(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'updatedAt']) &&
+        incoming().keys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'updatedAt']) &&
+        isValidPlanConfig(incoming());
+
+      allow update: if isAdmin() &&
+        configId == 'settings' &&
+        incoming().keys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'updatedAt']) &&
+        isValidPlanConfig(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    match /whitelist/{memberKey} {
+      allow get: if isValidId(memberKey) &&
+        (isAdmin() || (isVerifiedSignedIn() && existing().email == callerEmail()));
+      allow list: if isAdmin() || (isVerifiedSignedIn() && existing().email == callerEmail());
+
+      allow create: if isAdmin() &&
+        isValidId(memberKey) &&
+        incoming().memberKey == memberKey &&
+        incoming().keys().hasAll(['memberKey', 'email', 'displayName', 'phone', 'role', 'active', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['memberKey', 'email', 'displayName', 'phone', 'role', 'active', 'createdAt', 'updatedAt']) &&
+        isValidWhitelistMember(incoming());
+
+      allow update: if isVerifiedSignedIn() &&
+        isValidId(memberKey) &&
+        isValidWhitelistMember(incoming()) &&
+        incoming().memberKey == existing().memberKey &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (
+            isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'active', 'updatedAt'])
+          ) ||
+          (
+            existing().email == callerEmail() &&
+            existing().active == true &&
+            incoming().role == existing().role &&
+            incoming().active == existing().active &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(memberKey);
+    }
+
+    match /payments/{monthId} {
+      allow get: if isValidMonthId(monthId) &&
+        (isAdmin() || (isVerifiedSignedIn() && callerEmail() in existing().allowedEmails));
+      allow list: if isAdmin() || (isVerifiedSignedIn() && callerEmail() in existing().allowedEmails);
+
+      allow create: if isAdmin() &&
+        isValidMonthId(monthId) &&
+        incoming().monthId == monthId &&
+        incoming().createdByUid == request.auth.uid &&
+        incoming().keys().hasAll(['monthId', 'displayLabel', 'amountLkr', 'allowedEmails', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['monthId', 'displayLabel', 'amountLkr', 'allowedEmails', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidPaymentMonth(incoming());
+
+      allow update: if isAdmin() &&
+        isValidMonthId(monthId) &&
+        isValidPaymentMonth(incoming()) &&
+        incoming().monthId == existing().monthId &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayLabel', 'amountLkr', 'allowedEmails', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidMonthId(monthId);
+
+      match /members/{memberKey} {
+        allow get: if isValidMonthId(monthId) && isValidId(memberKey) &&
+          (isAdmin() || (isVerifiedSignedIn() && callerEmail() in existing().allowedEmails));
+        allow list: if isAdmin() || (isVerifiedSignedIn() && callerEmail() in existing().allowedEmails);
+
+        allow create: if isAdmin() &&
+          isValidMonthId(monthId) &&
+          isValidId(memberKey) &&
+          incoming().memberKey == memberKey &&
+          incoming().keys().hasAll(['memberKey', 'memberEmail', 'displayName', 'status', 'amountLkr', 'hasReceipt', 'allowedEmails', 'reminderCount', 'createdAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['memberKey', 'memberEmail', 'displayName', 'status', 'amountLkr', 'hasReceipt', 'allowedEmails', 'reminderCount', 'createdAt', 'submittedAt', 'confirmedAt', 'lastRemindedAt', 'updatedAt']) &&
+          isValidMemberPayment(incoming()) &&
+          existsAfter(/databases/$(database)/documents/payments/$(monthId));
+
+        allow update: if isVerifiedSignedIn() &&
+          isValidMonthId(monthId) &&
+          isValidId(memberKey) &&
+          isValidMemberPayment(incoming()) &&
+          incoming().memberKey == existing().memberKey &&
+          incoming().memberEmail == existing().memberEmail &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            (
+              isAdmin() &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'status', 'amountLkr', 'hasReceipt', 'allowedEmails', 'reminderCount', 'submittedAt', 'confirmedAt', 'lastRemindedAt', 'updatedAt'])
+            ) ||
+            (
+              existing().memberEmail == callerEmail() &&
+              incoming().amountLkr == existing().amountLkr &&
+              incoming().allowedEmails == existing().allowedEmails &&
+              incoming().reminderCount == existing().reminderCount &&
+              (
+                (
+                  (existing().status == 'pending' || existing().status == 'verifying') &&
+                  incoming().status == 'verifying' &&
+                  incoming().hasReceipt == true &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['status', 'hasReceipt', 'submittedAt', 'updatedAt'])
+                ) ||
+                (
+                  incoming().status == existing().status &&
+                  incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+                )
+              )
+            )
+          );
+
+        allow delete: if isAdmin() && isValidMonthId(monthId) && isValidId(memberKey);
+
+        match /private/{slipId} {
+          allow get: if isValidMonthId(monthId) && isValidId(memberKey) && slipId == 'slip' &&
+            (isAdmin() || (isVerifiedSignedIn() && existing().memberEmail == callerEmail()));
+          allow list: if false;
+
+          allow create, update: if isVerifiedSignedIn() &&
+            isValidMonthId(monthId) &&
+            isValidId(memberKey) &&
+            slipId == 'slip' &&
+            incoming().keys().hasAll(['memberEmail', 'uploadedByUid', 'mimeType', 'imageBase64', 'uploadedAt']) &&
+            incoming().keys().hasOnly(['memberEmail', 'uploadedByUid', 'mimeType', 'imageBase64', 'uploadedAt']) &&
+            isValidReceiptSlip(incoming()) &&
+            (
+              isAdmin() ||
+              (
+                incoming().memberEmail == callerEmail() &&
+                incoming().uploadedByUid == request.auth.uid &&
+                get(/databases/$(database)/documents/payments/$(monthId)/members/$(memberKey)).data.memberEmail == callerEmail() &&
+                get(/databases/$(database)/documents/payments/$(monthId)/members/$(memberKey)).data.status != 'paid'
+              )
+            );
+
+          allow delete: if isAdmin() && isValidMonthId(monthId) && isValidId(memberKey) && slipId == 'slip';
+        }
+      }
+
+      match /stats/{memberKey} {
+        allow get: if isValidMonthId(monthId) && isValidId(memberKey) &&
+          (isAdmin() || (isVerifiedSignedIn() && callerEmail() in existing().allowedEmails));
+        allow list: if isAdmin() || (isVerifiedSignedIn() && callerEmail() in existing().allowedEmails);
+
+        allow create, update: if isVerifiedSignedIn() &&
+          isValidMonthId(monthId) &&
+          isValidId(memberKey) &&
+          incoming().memberKey == memberKey &&
+          incoming().keys().hasAll(['memberKey', 'memberEmail', 'displayName', 'minutesListened', 'tracksCounted', 'allowedEmails', 'syncedAt']) &&
+          incoming().keys().hasOnly(['memberKey', 'memberEmail', 'displayName', 'spotifyDisplayName', 'minutesListened', 'tracksCounted', 'topArtist', 'topTrack', 'allowedEmails', 'syncedAt']) &&
+          isValidListeningStat(incoming()) &&
+          (
+            isAdmin() ||
+            (
+              incoming().memberEmail == callerEmail() &&
+              callerEmail() in get(/databases/$(database)/documents/payments/$(monthId)).data.allowedEmails &&
+              incoming().allowedEmails == get(/databases/$(database)/documents/payments/$(monthId)).data.allowedEmails
+            )
+          );
+
+        allow delete: if isAdmin() && isValidMonthId(monthId) && isValidId(memberKey);
+      }
+    }
+  }
+}

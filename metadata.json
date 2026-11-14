@@ -1,0 +1,6 @@
+{
+  "name": "AtaPotify",
+  "description": "Track monthly Spotify Family plan payments in LKR with Google Sign-In, receipt verification, automated WhatsApp reminders, user profiles, and billing history.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

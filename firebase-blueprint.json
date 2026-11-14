@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile storing display name, role, and WhatsApp phone number.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "Verified lowercase Google email" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "role": { "type": "string", "enum": ["admin", "member"], "description": "Access control role" },
+        "phone": { "type": "string", "description": "WhatsApp phone digits with country code" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
+      },
+      "required": ["uid", "email", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "PlanConfig": {
+      "title": "PlanConfig",
+      "description": "Global Spotify Family plan settings including fixed monthly LKR amount.",
+      "type": "object",
+      "properties": {
+        "planName": { "type": "string", "description": "Display name of the shared subscription" },
+        "monthlyAmountLkr": { "type": "integer", "description": "Fixed rounded monthly amount per member in LKR" },
+        "currency": { "type": "string", "description": "Currency code (LKR)" },
+        "allowedEmails": { "type": "array", "description": "Lowercase emails of whitelisted members and admin" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
+      },
+      "required": ["planName", "monthlyAmountLkr", "currency", "allowedEmails", "updatedAt"]
+    },
+    "WhitelistMember": {
+      "title": "WhitelistMember",
+      "description": "Admin-managed whitelisted friend roster with WhatsApp contact number.",
+      "type": "object",
+      "properties": {
+        "memberKey": { "type": "string", "description": "Deterministic email-derived document key" },
+        "email": { "type": "string", "description": "Lowercase whitelisted Google email" },
+        "displayName": { "type": "string", "description": "Friend display name" },
+        "phone": { "type": "string", "description": "WhatsApp number in international digits" },
+        "role": { "type": "string", "enum": ["member"], "description": "Member role" },
+        "active": { "type": "boolean", "description": "Whether friend is active in current plan" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
+      },
+      "required": ["memberKey", "email", "displayName", "phone", "role", "active", "createdAt", "updatedAt"]
+    },
+    "PaymentMonth": {
+      "title": "PaymentMonth",
+      "description": "Monthly billing cycle header identified by YYYY-MM.",
+      "type": "object",
+      "properties": {
+        "monthId": { "type": "string", "description": "Billing cycle ID (YYYY-MM)" },
+        "displayLabel": { "type": "string", "description": "Human-readable month label" },
+        "amountLkr": { "type": "integer", "description": "Fixed LKR amount per member for this cycle" },
+        "allowedEmails": { "type": "array", "description": "Lowercase emails authorized to view this month" },
+        "createdByUid": { "type": "string", "description": "Admin UID that generated this month" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
+      },
+      "required": ["monthId", "displayLabel", "amountLkr", "allowedEmails", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "MemberPaymentStatus": {
+      "title": "MemberPaymentStatus",
+      "description": "Peer-visible monthly payment status for a single member.",
+      "type": "object",
+      "properties": {
+        "memberKey": { "type": "string", "description": "Deterministic member key" },
+        "memberEmail": { "type": "string", "description": "Lowercase member email for self-update checks" },
+        "displayName": { "type": "string", "description": "Member display name" },
+        "status": { "type": "string", "enum": ["pending", "verifying", "paid"], "description": "Payment state" },
+        "amountLkr": { "type": "integer", "description": "Amount due in LKR" },
+        "hasReceipt": { "type": "boolean", "description": "True if a receipt image has been uploaded" },
+        "allowedEmails": { "type": "array", "description": "Denormalized authorized emails for list alignment" },
+        "reminderCount": { "type": "integer", "description": "Count of WhatsApp reminders dispatched" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Billing start timestamp (used for 7-day overdue check)" },
+        "submittedAt": { "type": "string", "format": "date-time", "description": "Receipt submission timestamp" },
+        "confirmedAt": { "type": "string", "format": "date-time", "description": "Admin payment confirmation timestamp" },
+        "lastRemindedAt": { "type": "string", "format": "date-time", "description": "Last WhatsApp reminder dispatch timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
+      },
+      "required": ["memberKey", "memberEmail", "displayName", "status", "amountLkr", "hasReceipt", "allowedEmails", "reminderCount", "createdAt", "updatedAt"]
+    },
+    "ReceiptSlip": {
+      "title": "ReceiptSlip",
+      "description": "Private compressed payment receipt slip readable by the uploader and Admin.",
+      "type": "object",
+      "properties": {
+        "memberEmail": { "type": "string", "description": "Lowercase email of the member who owes payment" },
+        "uploadedByUid": { "type": "string", "description": "UID of the uploader" },
+        "mimeType": { "type": "string", "description": "Image MIME type" },
+        "imageBase64": { "type": "string", "description": "Compressed Base64-encoded receipt thumbnail" },
+        "uploadedAt": { "type": "string", "format": "date-time", "description": "Server upload timestamp" }
+      },
+      "required": ["memberEmail", "uploadedByUid", "mimeType", "imageBase64", "uploadedAt"]
+    },
+    "ListeningStat": {
+      "title": "ListeningStat",
+      "description": "Monthly Spotify listening summary synced by each connected member for the Value Leaderboard.",
+      "type": "object",
+      "properties": {
+        "memberKey": { "type": "string", "description": "Deterministic member key" },
+        "memberEmail": { "type": "string", "description": "Lowercase member email" },
+        "displayName": { "type": "string", "description": "Member display name" },
+        "spotifyDisplayName": { "type": "string", "description": "Connected Spotify account display name" },
+        "minutesListened": { "type": "integer", "description": "Accumulated listening minutes tracked in this month" },
+        "tracksCounted": { "type": "integer", "description": "Unique tracks counted this month" },
+        "topArtist": { "type": "string", "description": "User top short-term artist" },
+        "topTrack": { "type": "string", "description": "User top short-term track" },
+        "allowedEmails": { "type": "array", "description": "Authorized lowercase emails for list alignment" },
+        "syncedAt": { "type": "string", "format": "date-time", "description": "Server sync timestamp" }
+      },
+      "required": ["memberKey", "memberEmail", "displayName", "minutesListened", "tracksCounted", "allowedEmails", "syncedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile documents keyed by Firebase UID."
+    },
+    "/plan_config/{configId}": {
+      "schema": { "$ref": "#/entities/PlanConfig" },
+      "description": "Global family plan settings document (settings)."
+    },
+    "/whitelist/{memberKey}": {
+      "schema": { "$ref": "#/entities/WhitelistMember" },
+      "description": "Whitelisted friends with WhatsApp numbers managed by Admin."
+    },
+    "/payments/{monthId}": {
+      "schema": { "$ref": "#/entities/PaymentMonth" },
+      "description": "Monthly payment archive documents keyed by YYYY-MM."
+    },
+    "/payments/{monthId}/members/{memberKey}": {
+      "schema": { "$ref": "#/entities/MemberPaymentStatus" },
+      "description": "Peer-visible member payment status entries within a billing month."
+    },
+    "/payments/{monthId}/members/{memberKey}/private/{slipId}": {
+      "schema": { "$ref": "#/entities/ReceiptSlip" },
+      "description": "Private compressed payment receipt slip document (slip)."
+    },
+    "/payments/{monthId}/stats/{memberKey}": {
+      "schema": { "$ref": "#/entities/ListeningStat" },
+      "description": "Peer-visible Spotify listening stats per member for the monthly Value Leaderboard."
+    }
+  }
+}

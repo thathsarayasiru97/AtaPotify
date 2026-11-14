@@ -1,0 +1,707 @@
+package com.example
+
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.credentials.CredentialManager
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.WhitelistMember
+import com.example.data.repository.AccessResolution
+import com.example.data.repository.AuthRepository
+import com.example.data.repository.PaymentRepository
+import com.example.data.repository.authStateFlow
+import com.example.data.service.SpotifyStatsService
+import com.example.ui.screens.AccessDeniedScreen
+import com.example.ui.screens.AdminScreen
+import com.example.ui.screens.AutoReminderQueueSheet
+import com.example.ui.screens.BoardScreen
+import com.example.ui.screens.HistoryScreen
+import com.example.ui.screens.LoadingGateScreen
+import com.example.ui.screens.ProfileEditorSheet
+import com.example.ui.screens.ReceiptSlipDialog
+import com.example.ui.screens.SignInScreen
+import com.example.ui.screens.SpotifySetupHintDialog
+import com.example.ui.screens.StartNewMonthDialog
+import com.example.ui.screens.WhitelistMemberDialog
+import com.example.ui.screens.attemptAutoSignIn
+import com.example.ui.screens.signOutFromApp
+import com.example.ui.theme.AmberWarning
+import com.example.ui.theme.AtaPotifyTheme
+import com.example.ui.theme.BorderSubtle
+import com.example.ui.theme.EmeraldContainer
+import com.example.ui.theme.ObsidianBg
+import com.example.ui.theme.SpotifyEmerald
+import com.example.ui.theme.SurfaceDark
+import com.example.ui.theme.TextSecondary
+import com.example.ui.viewmodel.AtaPotifyViewModel
+import com.example.ui.viewmodel.AuthGateUiState
+import com.example.ui.viewmodel.AuthGateViewModel
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+private enum class AppTab(
+    val routeId: String,
+    val labelRes: Int,
+    val icon: ImageVector,
+) {
+    BOARD("board", R.string.nav_board, Icons.Default.Dashboard),
+    HISTORY("history", R.string.nav_history, Icons.Default.History),
+    ADMIN("admin", R.string.nav_admin, Icons.Default.AdminPanelSettings),
+}
+
+class MainActivity : ComponentActivity() {
+
+    private val pendingSpotifyCallback = MutableStateFlow<Uri?>(null)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        captureSpotifyCallbackIntent(intent)
+
+        setContent {
+            AtaPotifyTheme {
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+                val credentialManager = remember(context) { CredentialManager.create(context) }
+                val currentUser by Firebase.auth.authStateFlow()
+                    .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
+                val pendingCallbackUri by pendingSpotifyCallback.asStateFlow()
+                    .collectAsStateWithLifecycle()
+
+                var hasAttemptedSilentSignIn by remember { mutableStateOf(false) }
+
+                LaunchedEffect(currentUser) {
+                    if (currentUser == null && !hasAttemptedSilentSignIn) {
+                        hasAttemptedSilentSignIn = true
+                        attemptAutoSignIn(
+                            context = context,
+                            credentialManager = credentialManager,
+                            onAuthSuccess = {},
+                            onUnauthenticated = {},
+                            scope = scope,
+                        )
+                    }
+                }
+
+                val user = currentUser
+                if (user == null) {
+                    SignInScreen(
+                        onAuthSuccess = {},
+                    )
+                } else {
+                    AuthGatedHost(
+                        firebaseUser = user,
+                        pendingSpotifyUri = pendingCallbackUri,
+                        onConsumeSpotifyUri = { pendingSpotifyCallback.value = null },
+                        onSignOut = {
+                            signOutFromApp(
+                                credentialManager = credentialManager,
+                                scope = scope,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureSpotifyCallbackIntent(intent)
+    }
+
+    private fun captureSpotifyCallbackIntent(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "atapotify" && uri.host == "spotify-callback") {
+            pendingSpotifyCallback.value = uri
+        }
+    }
+}
+
+@Composable
+private fun AuthGatedHost(
+    firebaseUser: FirebaseUser,
+    pendingSpotifyUri: Uri?,
+    onConsumeSpotifyUri: () -> Unit,
+    onSignOut: () -> Unit,
+) {
+    val appContext = LocalContext.current.applicationContext
+    val databaseId = remember(appContext) {
+        appContext.getString(R.string.firestore_database_id)
+    }
+    val firestore = remember(databaseId) {
+        FirebaseFirestore.getInstance(databaseId)
+    }
+    val authRepository = remember(firestore) {
+        AuthRepository(db = firestore, auth = Firebase.auth)
+    }
+    val paymentRepository = remember(firestore) {
+        PaymentRepository(db = firestore, auth = Firebase.auth)
+    }
+    val spotifyService = remember(appContext) {
+        SpotifyStatsService(appContext)
+    }
+
+    val gateViewModel: AuthGateViewModel = viewModel(
+        key = "gate_${firebaseUser.uid}",
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return AuthGateViewModel(
+                    authRepository = authRepository,
+                    firebaseUser = firebaseUser,
+                ) as T
+            }
+        },
+    )
+
+    val gateState by gateViewModel.authGateState.collectAsStateWithLifecycle()
+
+    when (val state = gateState) {
+        AuthGateUiState.CheckingAccess -> {
+            LoadingGateScreen(message = "Verifying family plan access...")
+        }
+
+        is AuthGateUiState.Denied -> {
+            AccessDeniedScreen(
+                email = state.email,
+                errorMessage = state.errorMessage,
+                onRetry = { gateViewModel.verifyAccess() },
+                onSignOut = onSignOut,
+            )
+        }
+
+        is AuthGateUiState.Authorized -> {
+            val mainViewModel: AtaPotifyViewModel = viewModel(
+                key = "main_${state.session.uid}_${state.session.isAdmin}",
+                factory = object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                        return AtaPotifyViewModel(
+                            authRepository = authRepository,
+                            paymentRepository = paymentRepository,
+                            spotifyService = spotifyService,
+                            session = state.session,
+                        ) as T
+                    }
+                },
+            )
+
+            MainAppScaffold(
+                session = state.session,
+                viewModel = mainViewModel,
+                pendingSpotifyUri = pendingSpotifyUri,
+                onConsumeSpotifyUri = onConsumeSpotifyUri,
+                onSignOut = onSignOut,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MainAppScaffold(
+    session: AccessResolution.Authorized,
+    viewModel: AtaPotifyViewModel,
+    pendingSpotifyUri: Uri?,
+    onConsumeSpotifyUri: () -> Unit,
+    onSignOut: () -> Unit,
+) {
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
+    val planConfig by viewModel.planConfig.collectAsStateWithLifecycle()
+    val whitelist by viewModel.whitelist.collectAsStateWithLifecycle()
+    val paymentMonths by viewModel.paymentMonths.collectAsStateWithLifecycle()
+    val currentMonth by viewModel.currentMonth.collectAsStateWithLifecycle()
+    val selectedHistoryMonth by viewModel.selectedHistoryMonth.collectAsStateWithLifecycle()
+    val currentMonthMembers by viewModel.currentMonthMembers.collectAsStateWithLifecycle()
+    val currentMonthStats by viewModel.currentMonthStats.collectAsStateWithLifecycle()
+    val historyMonthMembers by viewModel.historyMonthMembers.collectAsStateWithLifecycle()
+    val historyMonthStats by viewModel.historyMonthStats.collectAsStateWithLifecycle()
+    val overdueReminders by viewModel.overdueReminders.collectAsStateWithLifecycle()
+    val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
+    val receiptDialogState by viewModel.receiptDialog.collectAsStateWithLifecycle()
+    val showAutoReminderSheet by viewModel.showAutoReminderSheet.collectAsStateWithLifecycle()
+    val spotifyConnected by viewModel.spotifyConnected.collectAsStateWithLifecycle()
+    val spotifyName by viewModel.spotifyName.collectAsStateWithLifecycle()
+
+    var selectedTab by rememberSaveable { mutableStateOf(AppTab.BOARD) }
+    var showProfileSheet by remember { mutableStateOf(false) }
+    var showStartMonthDialog by remember { mutableStateOf(false) }
+    var showSpotifyHintDialog by remember { mutableStateOf(false) }
+    var showWhitelistDialog by remember { mutableStateOf(false) }
+    var editingWhitelistMember by remember { mutableStateOf<WhitelistMember?>(null) }
+
+    val tabs = remember(session.isAdmin) {
+        if (session.isAdmin) listOf(AppTab.BOARD, AppTab.HISTORY, AppTab.ADMIN)
+        else listOf(AppTab.BOARD, AppTab.HISTORY)
+    }
+
+    LaunchedEffect(session.isAdmin) {
+        if (!session.isAdmin && selectedTab == AppTab.ADMIN) {
+            selectedTab = AppTab.BOARD
+        }
+    }
+
+    LaunchedEffect(pendingSpotifyUri) {
+        if (pendingSpotifyUri != null) {
+            viewModel.handleSpotifyCallback(pendingSpotifyUri)
+            onConsumeSpotifyUri()
+        }
+    }
+
+    LaunchedEffect(viewModel) {
+        viewModel.snackbarEvents.collect { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    BackHandler(enabled = selectedTab != AppTab.BOARD) {
+        selectedTab = AppTab.BOARD
+    }
+
+    val effectiveDisplayName = userProfile?.displayName?.takeIf { it.isNotBlank() } ?: session.displayName
+    val phoneByKey = remember(whitelist) { whitelist.associate { it.memberKey to it.phone } }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val useNavigationRail = maxWidth >= 600.dp
+
+        Scaffold(
+            containerColor = ObsidianBg,
+            contentWindowInsets = WindowInsets.safeDrawing,
+            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+            topBar = {
+                Column {
+                    TopAppBar(
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = SurfaceDark,
+                            titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        title = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(EmeraldContainer),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.GraphicEq,
+                                        contentDescription = stringResource(R.string.cd_app_emblem),
+                                        tint = SpotifyEmerald,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = stringResource(R.string.app_name),
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = "$effectiveDisplayName • ${if (session.isAdmin) "Admin" else "Family Member"}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        },
+                        actions = {
+                            if (session.isAdmin && overdueReminders.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { viewModel.openAutoReminderSheet() },
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("topbar_overdue_button"),
+                                ) {
+                                    BadgedBox(
+                                        badge = {
+                                            Badge(containerColor = AmberWarning, contentColor = ObsidianBg) {
+                                                Text(overdueReminders.size.toString())
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.NotificationsActive,
+                                            contentDescription = stringResource(R.string.cd_overdue_alert),
+                                            tint = AmberWarning,
+                                        )
+                                    }
+                                }
+                            }
+                            IconButton(
+                                onClick = { showProfileSheet = true },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("topbar_profile_button"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = stringResource(R.string.cd_profile),
+                                    tint = SpotifyEmerald,
+                                )
+                            }
+                        },
+                    )
+                    if (isBusy) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(2.dp),
+                            color = SpotifyEmerald,
+                            trackColor = SurfaceDark,
+                        )
+                    }
+                }
+            },
+            bottomBar = {
+                if (!useNavigationRail) {
+                    NavigationBar(
+                        containerColor = SurfaceDark,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ) {
+                        tabs.forEach { tab ->
+                            val selected = selectedTab == tab
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = { selectedTab = tab },
+                                icon = {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = stringResource(tab.labelRes),
+                                    )
+                                },
+                                label = { Text(stringResource(tab.labelRes)) },
+                                modifier = Modifier.testTag("nav_${tab.routeId}"),
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = SpotifyEmerald,
+                                    selectedTextColor = SpotifyEmerald,
+                                    indicatorColor = EmeraldContainer,
+                                    unselectedIconColor = TextSecondary,
+                                    unselectedTextColor = TextSecondary,
+                                ),
+                            )
+                        }
+                    }
+                }
+            },
+        ) { innerPadding ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+            ) {
+                if (useNavigationRail) {
+                    NavigationRail(
+                        containerColor = SurfaceDark,
+                        modifier = Modifier.fillMaxHeight(),
+                    ) {
+                        Spacer(Modifier.size(12.dp))
+                        tabs.forEach { tab ->
+                            val selected = selectedTab == tab
+                            NavigationRailItem(
+                                selected = selected,
+                                onClick = { selectedTab = tab },
+                                icon = {
+                                    Icon(
+                                        imageVector = tab.icon,
+                                        contentDescription = stringResource(tab.labelRes),
+                                    )
+                                },
+                                label = { Text(stringResource(tab.labelRes)) },
+                                modifier = Modifier.testTag("rail_${tab.routeId}"),
+                                colors = NavigationRailItemDefaults.colors(
+                                    selectedIconColor = SpotifyEmerald,
+                                    selectedTextColor = SpotifyEmerald,
+                                    indicatorColor = EmeraldContainer,
+                                    unselectedIconColor = TextSecondary,
+                                    unselectedTextColor = TextSecondary,
+                                ),
+                            )
+                        }
+                    }
+                }
+
+                Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+                    when (selectedTab) {
+                        AppTab.BOARD -> BoardScreen(
+                            session = session,
+                            currentMonth = currentMonth,
+                            members = currentMonthMembers,
+                            stats = currentMonthStats,
+                            whitelist = whitelist,
+                            overdueReminders = overdueReminders,
+                            defaultAmountLkr = planConfig.monthlyAmountLkr,
+                            spotifyConnected = spotifyConnected,
+                            spotifyName = spotifyName,
+                            isSpotifyClientConfigured = viewModel.isSpotifyClientConfigured,
+                            isBusy = isBusy,
+                            onOpenStartMonth = { showStartMonthDialog = true },
+                            onUploadSlip = { uri, member ->
+                                currentMonth?.let { month ->
+                                    viewModel.uploadReceiptSlip(context, uri, month.monthId, member)
+                                }
+                            },
+                            onViewSlip = { member ->
+                                currentMonth?.let { month ->
+                                    viewModel.openReceiptViewer(month.monthId, member)
+                                }
+                            },
+                            onConfirmPaid = { member ->
+                                currentMonth?.let { month ->
+                                    viewModel.confirmMemberPayment(month.monthId, member.memberKey)
+                                }
+                            },
+                            onRemindMember = { member, phone ->
+                                currentMonth?.let { month ->
+                                    viewModel.sendWhatsAppReminder(context, month, member, phone)
+                                }
+                            },
+                            onOpenOverdueQueue = { viewModel.openAutoReminderSheet() },
+                            onConnectSpotify = { viewModel.launchSpotifyConnect(context) },
+                            onSyncSpotify = { viewModel.syncSpotifyStats() },
+                            onShowSpotifySetupHint = { showSpotifyHintDialog = true },
+                        )
+
+                        AppTab.HISTORY -> HistoryScreen(
+                            session = session,
+                            months = paymentMonths,
+                            selectedMonth = selectedHistoryMonth,
+                            members = historyMonthMembers,
+                            stats = historyMonthStats,
+                            whitelist = whitelist,
+                            isBusy = isBusy,
+                            onSelectMonth = { viewModel.selectHistoryMonth(it) },
+                            onViewSlip = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    viewModel.openReceiptViewer(month.monthId, member)
+                                }
+                            },
+                            onConfirmPaid = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    viewModel.confirmMemberPayment(month.monthId, member.memberKey)
+                                }
+                            },
+                            onRemindMember = { member, phone ->
+                                selectedHistoryMonth?.let { month ->
+                                    viewModel.sendWhatsAppReminder(context, month, member, phone)
+                                }
+                            },
+                        )
+
+                        AppTab.ADMIN -> AdminScreen(
+                            planConfig = planConfig,
+                            currentMonth = currentMonth,
+                            whitelist = whitelist,
+                            isBusy = isBusy,
+                            onSaveLkrRate = { amount, alsoUpdateActive ->
+                                viewModel.updateMonthlyLkrRate(amount, alsoUpdateActive)
+                            },
+                            onAddMemberClick = {
+                                editingWhitelistMember = null
+                                showWhitelistDialog = true
+                            },
+                            onEditMemberClick = { member ->
+                                editingWhitelistMember = member
+                                showWhitelistDialog = true
+                            },
+                            onToggleMemberActive = { member, active ->
+                                viewModel.upsertWhitelistMember(
+                                    email = member.email,
+                                    displayName = member.displayName,
+                                    phone = member.phone,
+                                    active = active,
+                                    onDone = {},
+                                )
+                            },
+                            onRemoveMemberClick = { member ->
+                                viewModel.removeWhitelistMember(member.memberKey)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showProfileSheet) {
+        ProfileEditorSheet(
+            session = session,
+            profile = userProfile,
+            spotifyConnected = spotifyConnected,
+            spotifyName = spotifyName,
+            isBusy = isBusy,
+            onSaveProfile = { newName, newPhone ->
+                viewModel.updateOwnProfile(newName, newPhone) {
+                    showProfileSheet = false
+                }
+            },
+            onDisconnectSpotify = { viewModel.disconnectSpotify() },
+            onSignOut = {
+                showProfileSheet = false
+                onSignOut()
+            },
+            onDismiss = { showProfileSheet = false },
+        )
+    }
+
+    receiptDialogState?.let { dialogState ->
+        ReceiptSlipDialog(
+            state = dialogState,
+            isAdmin = session.isAdmin,
+            isBusy = isBusy,
+            onConfirmPayment = {
+                viewModel.confirmMemberPayment(dialogState.monthId, dialogState.member.memberKey)
+            },
+            onRejectToPending = {
+                viewModel.rejectMemberPayment(dialogState.monthId, dialogState.member.memberKey)
+            },
+            onDismiss = { viewModel.closeReceiptViewer() },
+        )
+    }
+
+    if (showAutoReminderSheet && session.isAdmin) {
+        AutoReminderQueueSheet(
+            candidates = overdueReminders,
+            onSendReminder = { candidate ->
+                currentMonth?.let { month ->
+                    viewModel.sendWhatsAppReminder(
+                        context = context,
+                        month = month,
+                        member = candidate.member,
+                        phoneDigits = phoneByKey[candidate.member.memberKey].orEmpty(),
+                        customMessage = candidate.prefilledMessage,
+                    )
+                }
+            },
+            onDismiss = { viewModel.dismissAutoReminderSheet() },
+        )
+    }
+
+    if (showStartMonthDialog && session.isAdmin) {
+        val suggested = remember(paymentMonths) {
+            AtaPotifyConstants.nextSuggestedMonthId(paymentMonths.map { it.monthId })
+        }
+        StartNewMonthDialog(
+            suggestedMonthId = suggested,
+            defaultAmountLkr = planConfig.monthlyAmountLkr,
+            activeMemberCount = whitelist.count { it.active },
+            isBusy = isBusy,
+            onConfirm = { monthId, label, amountLkr ->
+                viewModel.startNewMonth(monthId, label, amountLkr) {
+                    showStartMonthDialog = false
+                }
+            },
+            onDismiss = { showStartMonthDialog = false },
+        )
+    }
+
+    if (showWhitelistDialog && session.isAdmin) {
+        WhitelistMemberDialog(
+            editingMember = editingWhitelistMember,
+            isBusy = isBusy,
+            onSave = { email, name, phone, active ->
+                viewModel.upsertWhitelistMember(
+                    email = email,
+                    displayName = name,
+                    phone = phone,
+                    active = active,
+                    onDone = {
+                        showWhitelistDialog = false
+                        editingWhitelistMember = null
+                    },
+                )
+            },
+            onDismiss = {
+                showWhitelistDialog = false
+                editingWhitelistMember = null
+            },
+        )
+    }
+
+    if (showSpotifyHintDialog) {
+        SpotifySetupHintDialog(onDismiss = { showSpotifyHintDialog = false })
+    }
+}
