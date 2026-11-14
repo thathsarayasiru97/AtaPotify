@@ -192,6 +192,14 @@ When shipping a new fix or feature directly to family members:
    - Write user-facing release notes in the description (displayed inside AtaPotify's update dialog).
    - Attach the `.apk` file as a release asset and publish as the latest (non-draft) release.
 
+### Automated APK Releases (GitHub Actions)
+The repository includes **`.github/workflows/release-apk.yml`**, which automatically runs `:app:testDebugUnitTest`, builds the APK, and uploads `AtaPotify-v<versionName>.apk` to **GitHub Releases** whenever you push to `main` or push a `v*` tag:
+
+1. In your GitHub repository, open **Settings → Secrets and variables → Actions** and add:
+   - `SPOTIFY_CLIENT_ID` — your Spotify Developer Client ID.
+   - *(Recommended for production signing)* `UPLOAD_KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` matching `my-upload-key.jks` (`upload` alias). If omitted, the workflow falls back cleanly to the repo's `debug.keystore.base64` so test builds still publish automatically.
+2. Whenever you want friends to receive an in-app update prompt, bump `versionCode` + `versionName` in `app/build.gradle.kts` and push to `main` (or push tag `v<versionName>`). GitHub Actions creates/updates the release and attaches the latest `.apk` automatically.
+
 ---
 
 ## Contributing

@@ -580,6 +580,11 @@ private fun MainAppScaffold(
                                     viewModel.rewindMemberPayment(month.monthId, member)
                                 }
                             },
+                            onQuickStatusOverride = { member, targetStatus ->
+                                currentMonth?.let { month ->
+                                    viewModel.setMemberPaymentStatusOverride(month.monthId, member, targetStatus)
+                                }
+                            },
                             onEditPayment = { member ->
                                 currentMonth?.let { month ->
                                     editingPaymentContext = month to member
@@ -630,6 +635,11 @@ private fun MainAppScaffold(
                             onRewindPaid = { member ->
                                 selectedHistoryMonth?.let { month ->
                                     viewModel.rewindMemberPayment(month.monthId, member)
+                                }
+                            },
+                            onQuickStatusOverride = { member, targetStatus ->
+                                selectedHistoryMonth?.let { month ->
+                                    viewModel.setMemberPaymentStatusOverride(month.monthId, member, targetStatus)
                                 }
                             },
                             onEditPayment = { member ->

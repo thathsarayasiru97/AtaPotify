@@ -47,6 +47,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -70,6 +71,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -128,6 +131,7 @@ fun BoardScreen(
     onViewSlip: (MemberPaymentStatus) -> Unit,
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
     onRewindPaid: (MemberPaymentStatus) -> Unit,
+    onQuickStatusOverride: (MemberPaymentStatus, String) -> Unit = { _, _ -> },
     onEditPayment: (MemberPaymentStatus) -> Unit,
     onDeletePayment: (MemberPaymentStatus) -> Unit,
     onRemindMember: (MemberPaymentStatus, String) -> Unit,
@@ -192,7 +196,12 @@ fun BoardScreen(
                 item {
                     MonthlyBillingSummaryCard(
                         month = currentMonth,
+                        members = members,
                         summary = billingSummary,
+                        selfEmail = session.email,
+                        isAdmin = session.isAdmin,
+                        isBusy = isBusy,
+                        onQuickStatusOverride = onQuickStatusOverride,
                     )
                 }
             }
@@ -512,9 +521,14 @@ private fun MonthHeroCard(
 }
 
 @Composable
-private fun MonthlyBillingSummaryCard(
+internal fun MonthlyBillingSummaryCard(
     month: PaymentMonth,
+    members: List<MemberPaymentStatus>,
     summary: MonthlyBillingSummary,
+    selfEmail: String,
+    isAdmin: Boolean,
+    isBusy: Boolean,
+    onQuickStatusOverride: (MemberPaymentStatus, String) -> Unit,
 ) {
     val isSettled = summary.totalCount > 0 && summary.netBalanceLkr >= 0L
     val pctSettled = (summary.collectionFraction * 100f).roundToInt()
@@ -702,6 +716,201 @@ private fun MonthlyBillingSummaryCard(
                     )
                 }
             }
+
+            if (members.isNotEmpty()) {
+                HorizontalDivider(color = BorderSubtle)
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.title_member_status_breakdown),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = if (isAdmin) {
+                                stringResource(R.string.hint_tap_status_override)
+                            } else {
+                                "${members.size} members"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isAdmin) SpotifyEmerald else TextMuted,
+                        )
+                    }
+
+                    members.forEach { member ->
+                        BillingSummaryMemberRow(
+                            member = member,
+                            isSelf = member.memberEmail.equals(selfEmail, ignoreCase = true),
+                            isAdmin = isAdmin,
+                            isBusy = isBusy,
+                            onQuickStatusOverride = { targetStatus ->
+                                onQuickStatusOverride(member, targetStatus)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BillingSummaryMemberRow(
+    member: MemberPaymentStatus,
+    isSelf: Boolean,
+    isAdmin: Boolean,
+    isBusy: Boolean,
+    onQuickStatusOverride: (String) -> Unit,
+) {
+    val isPaid = member.status == AtaPotifyConstants.STATUS_PAID
+    val isVerifying = member.status == AtaPotifyConstants.STATUS_VERIFYING
+    val isPending = !isPaid && !isVerifying
+
+    val indicatorColor = when {
+        isPaid -> SpotifyEmerald
+        isVerifying -> AmberWarning
+        else -> CoralPending
+    }
+    val indicatorContainer = when {
+        isPaid -> EmeraldContainer
+        isVerifying -> AmberContainer
+        else -> CoralContainer
+    }
+    val indicatorIcon = when {
+        isPaid -> Icons.Default.CheckCircle
+        isVerifying -> Icons.Default.HourglassTop
+        else -> Icons.Default.Schedule
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("summary_member_row_${member.memberKey}"),
+        color = SurfaceElevated,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, indicatorColor.copy(alpha = 0.3f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(indicatorContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = indicatorIcon,
+                    contentDescription = member.status,
+                    tint = indicatorColor,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isSelf) "${member.displayName} (You)" else member.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = buildString {
+                        append("LKR ${formatLkr(member.amountLkr)}")
+                        when {
+                            isVerifying -> append(" • Verifying slip")
+                            isPaid -> append(" • Settled")
+                            else -> append(" • Unpaid")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isVerifying) AmberWarning else TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            if (isAdmin) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    QuickStatusOverrideChip(
+                        label = stringResource(R.string.status_paid),
+                        selected = isPaid,
+                        activeColor = SpotifyEmerald,
+                        activeContainer = EmeraldContainer,
+                        enabled = !isBusy && !isPaid,
+                        contentDescription = stringResource(R.string.cd_quick_mark_paid, member.displayName),
+                        testTag = "summary_override_paid_${member.memberKey}",
+                        onClick = { onQuickStatusOverride(AtaPotifyConstants.STATUS_PAID) },
+                    )
+                    QuickStatusOverrideChip(
+                        label = stringResource(R.string.status_pending),
+                        selected = isPending,
+                        activeColor = CoralPending,
+                        activeContainer = CoralContainer,
+                        enabled = !isBusy && !isPending,
+                        contentDescription = stringResource(R.string.cd_quick_mark_pending, member.displayName),
+                        testTag = "summary_override_pending_${member.memberKey}",
+                        onClick = { onQuickStatusOverride(AtaPotifyConstants.STATUS_PENDING) },
+                    )
+                }
+            } else {
+                StatusPill(status = member.status)
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickStatusOverrideChip(
+    label: String,
+    selected: Boolean,
+    activeColor: Color,
+    activeContainer: Color,
+    enabled: Boolean,
+    contentDescription: String,
+    testTag: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        color = if (selected) activeContainer else SurfaceDark,
+        shape = RoundedCornerShape(999.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (selected) activeColor.copy(alpha = 0.7f) else BorderSubtle,
+        ),
+        modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .semantics { this.contentDescription = contentDescription }
+            .testTag(testTag),
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) activeColor else TextSecondary,
+                maxLines = 1,
+            )
         }
     }
 }

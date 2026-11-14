@@ -1,0 +1,98 @@
+name: Build & Publish APK to GitHub Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare environment secrets
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+        run: |
+          if [ -n "$SPOTIFY_CLIENT_ID" ]; then
+            echo "SPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID" > .env
+          else
+            cp .env.example .env
+          fi
+
+      - name: Decode signing keystore
+        id: signing
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$UPLOAD_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$UPLOAD_KEYSTORE_BASE64" | base64 -d > my-upload-key.jks
+            echo "build_type=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "UPLOAD_KEYSTORE_BASE64 not set; falling back to repository debug.keystore.base64"
+            base64 -d debug.keystore.base64 > debug.keystore
+            echo "build_type=debug" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve release tag from versionName
+        id: meta
+        run: |
+          VERSION_NAME=$(grep -E '^\s*versionName\s*=' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v${VERSION_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest
+
+      - name: Build APK
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ "${{ steps.signing.outputs.build_type }}" = "release" ]; then
+            gradle :app:assembleRelease
+            cp app/build/outputs/apk/release/app-release.apk "AtaPotify-${{ steps.meta.outputs.tag }}.apk"
+          else
+            gradle :app:assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk "AtaPotify-${{ steps.meta.outputs.tag }}-debug.apk"
+          fi
+
+      - name: Publish APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: AtaPotify ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          make_latest: true
+          files: AtaPotify-*.apk

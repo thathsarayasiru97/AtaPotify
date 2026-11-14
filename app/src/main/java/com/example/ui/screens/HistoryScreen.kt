@@ -38,7 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.ListeningStat
@@ -50,11 +49,8 @@ import com.example.data.repository.AccessResolution
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.CoralPending
 import com.example.ui.theme.EmeraldContainer
-import com.example.ui.theme.MonoNumericLarge
-import com.example.ui.theme.MonoNumericSmall
 import com.example.ui.theme.SpotifyEmerald
 import com.example.ui.theme.SurfaceDark
-import com.example.ui.theme.SurfaceElevated
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
 
@@ -74,6 +70,7 @@ fun HistoryScreen(
     onViewSlip: (MemberPaymentStatus) -> Unit,
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
     onRewindPaid: (MemberPaymentStatus) -> Unit,
+    onQuickStatusOverride: (MemberPaymentStatus, String) -> Unit = { _, _ -> },
     onEditPayment: (MemberPaymentStatus) -> Unit,
     onDeletePayment: (MemberPaymentStatus) -> Unit,
     onRemindMember: (MemberPaymentStatus, String) -> Unit,
@@ -179,86 +176,60 @@ fun HistoryScreen(
                 if (selectedMonth != null) {
                     item {
                         val summary = remember(members) { calculateMonthlyBillingSummary(members) }
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = SurfaceElevated),
-                            border = BorderStroke(1.dp, BorderSubtle),
-                            shape = RoundedCornerShape(18.dp),
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column {
-                                        Text(
-                                            text = selectedMonth.displayLabel,
-                                            style = MaterialTheme.typography.titleLarge,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                        )
-                                        Text(
-                                            text = "${summary.paidCount} / ${summary.totalCount} paid • Pending LKR ${summary.totalPendingLkr}",
-                                            style = MonoNumericSmall,
-                                            color = TextSecondary,
-                                        )
-                                    }
-                                    Text(
-                                        text = "LKR ${summary.collectedLkr}",
-                                        style = MonoNumericLarge.copy(fontSize = 20.sp),
-                                        color = SpotifyEmerald,
-                                    )
-                                }
+                        MonthlyBillingSummaryCard(
+                            month = selectedMonth,
+                            members = members,
+                            summary = summary,
+                            selfEmail = session.email,
+                            isAdmin = session.isAdmin,
+                            isBusy = isBusy,
+                            onQuickStatusOverride = onQuickStatusOverride,
+                        )
+                    }
 
-                                if (session.isAdmin) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = { onOpenAddMemberToMonth(selectedMonth) },
-                                            enabled = !isBusy,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .minimumInteractiveComponentSize()
-                                                .testTag("history_add_member_button"),
-                                            border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.45f)),
-                                            shape = RoundedCornerShape(10.dp),
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.PersonAdd,
-                                                contentDescription = null,
-                                                tint = SpotifyEmerald,
-                                                modifier = Modifier.size(16.dp),
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(stringResource(R.string.btn_add_to_month), color = SpotifyEmerald)
-                                        }
-                                        OutlinedButton(
-                                            onClick = { onDeleteMonth(selectedMonth) },
-                                            enabled = !isBusy,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .minimumInteractiveComponentSize()
-                                                .testTag("history_delete_month_button"),
-                                            border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.45f)),
-                                            shape = RoundedCornerShape(10.dp),
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.DeleteOutline,
-                                                contentDescription = null,
-                                                tint = CoralPending,
-                                                modifier = Modifier.size(16.dp),
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(stringResource(R.string.btn_delete_month), color = CoralPending)
-                                        }
-                                    }
+                    if (session.isAdmin) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedButton(
+                                    onClick = { onOpenAddMemberToMonth(selectedMonth) },
+                                    enabled = !isBusy,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("history_add_member_button"),
+                                    border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.45f)),
+                                    shape = RoundedCornerShape(10.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PersonAdd,
+                                        contentDescription = null,
+                                        tint = SpotifyEmerald,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.btn_add_to_month), color = SpotifyEmerald)
+                                }
+                                OutlinedButton(
+                                    onClick = { onDeleteMonth(selectedMonth) },
+                                    enabled = !isBusy,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("history_delete_month_button"),
+                                    border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.45f)),
+                                    shape = RoundedCornerShape(10.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteOutline,
+                                        contentDescription = null,
+                                        tint = CoralPending,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.btn_delete_month), color = CoralPending)
                                 }
                             }
                         }

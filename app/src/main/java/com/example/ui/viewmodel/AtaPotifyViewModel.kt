@@ -488,6 +488,36 @@ class AtaPotifyViewModel(
         }
     }
 
+    fun setMemberPaymentStatusOverride(
+        monthId: String,
+        member: MemberPaymentStatus,
+        targetStatus: String,
+    ) {
+        if (member.status == targetStatus) return
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = if (targetStatus == AtaPotifyConstants.STATUS_PAID) {
+                paymentRepository.confirmPayment(monthId, member.memberKey)
+            } else {
+                paymentRepository.rewindPayment(monthId, member.memberKey, targetStatus)
+            }
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    val label = when (targetStatus) {
+                        AtaPotifyConstants.STATUS_PAID -> "Paid"
+                        AtaPotifyConstants.STATUS_VERIFYING -> "Verifying"
+                        else -> "Pending"
+                    }
+                    _snackbarEvents.tryEmit("Marked ${member.displayName} as $label")
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to update payment status")
+                },
+            )
+        }
+    }
+
     fun editMemberPayment(
         monthId: String,
         member: MemberPaymentStatus,
