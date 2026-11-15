@@ -112,10 +112,14 @@ data class PlanConfig(
     val bankAccountNumber: String = "",
     val bankAccountHolder: String = "",
     val bankBranch: String = "",
+    val pinnedAnnouncement: String = "",
     @ServerTimestamp val updatedAt: Timestamp? = null,
 ) {
     val hasBankDetails: Boolean
         get() = bankAccountNumber.isNotBlank() || bankName.isNotBlank()
+
+    val hasPinnedAnnouncement: Boolean
+        get() = pinnedAnnouncement.isNotBlank()
 
     fun formattedBankCopyText(): String = buildString {
         if (bankName.isNotBlank()) appendLine("Bank: $bankName")
@@ -294,6 +298,12 @@ data class AllTimeMemberStanding(
     val favoriteArtist: String,
 )
 
+data class LongestStreakStanding(
+    val memberKey: String,
+    val displayName: String,
+    val streakMonths: Int,
+)
+
 data class AllTimeWrappedSummary(
     val monthsTracked: Int,
     val totalGroupMinutes: Long,
@@ -301,16 +311,79 @@ data class AllTimeWrappedSummary(
     val topListener: AllTimeMemberStanding?,
     val topArtists: List<String>,
     val standings: List<AllTimeMemberStanding>,
+    val longestStreak: LongestStreakStanding? = null,
 )
+
+fun calculatePaymentStreaks(
+    monthsSortedDesc: List<PaymentMonth>,
+    membersByMonth: Map<String, List<MemberPaymentStatus>>,
+): Map<String, Int> {
+    if (monthsSortedDesc.isEmpty() || membersByMonth.isEmpty()) return emptyMap()
+    val orderedMonths = monthsSortedDesc.sortedByDescending { it.monthId }
+    val allMemberKeys = membersByMonth.values.flatten().map { it.memberKey }.toSet()
+    val streaks = mutableMapOf<String, Int>()
+
+    for (memberKey in allMemberKeys) {
+        var count = 0
+        var started = false
+        for ((index, month) in orderedMonths.withIndex()) {
+            val entry = membersByMonth[month.monthId]?.firstOrNull { it.memberKey == memberKey }
+            if (entry == null) {
+                if (started) break else continue
+            }
+            if (entry.status == AtaPotifyConstants.STATUS_PAID) {
+                count++
+                started = true
+            } else {
+                // If the newest cycle is still in progress (pending/verifying), don't reset prior streak yet
+                if (index == 0 && !started) {
+                    continue
+                }
+                break
+            }
+        }
+        if (count > 0) {
+            streaks[memberKey] = count
+        }
+    }
+    return streaks
+}
+
+fun calculateLongestStreakStanding(
+    monthsSortedDesc: List<PaymentMonth>,
+    membersByMonth: Map<String, List<MemberPaymentStatus>>,
+): LongestStreakStanding? {
+    val streaks = calculatePaymentStreaks(monthsSortedDesc, membersByMonth)
+    if (streaks.isEmpty()) return null
+    val nameByKey = mutableMapOf<String, String>()
+    for (month in monthsSortedDesc.sortedByDescending { it.monthId }) {
+        for (m in membersByMonth[month.monthId].orEmpty()) {
+            if (m.displayName.isNotBlank() && m.memberKey !in nameByKey) {
+                nameByKey[m.memberKey] = m.displayName
+            }
+        }
+    }
+    val best = streaks.entries.maxWithOrNull(
+        compareBy<Map.Entry<String, Int>> { it.value }
+            .thenBy { nameByKey[it.key]?.lowercase().orEmpty() }
+    ) ?: return null
+    if (best.value <= 0) return null
+    return LongestStreakStanding(
+        memberKey = best.key,
+        displayName = nameByKey[best.key].orEmpty().ifBlank { "Member" },
+        streakMonths = best.value,
+    )
+}
 
 fun calculateAllTimeWrappedSummary(
     allStatsByMonth: Map<String, List<ListeningStat>>,
     monthAmountByMonth: Map<String, Long>,
+    longestStreak: LongestStreakStanding? = null,
 ): AllTimeWrappedSummary? {
     val nonEmptyMonths = allStatsByMonth.filterValues { stats ->
         stats.any { it.minutesListened > 0L || it.tracksCounted > 0L }
     }
-    if (nonEmptyMonths.isEmpty()) return null
+    if (nonEmptyMonths.isEmpty() && longestStreak == null) return null
 
     data class Accumulator(
         var displayName: String = "",
@@ -350,7 +423,7 @@ fun calculateAllTimeWrappedSummary(
         )
     }.sortedByDescending { it.totalMinutes }
 
-    if (standings.isEmpty()) return null
+    if (standings.isEmpty() && longestStreak == null) return null
 
     val topListener = standings.firstOrNull { it.totalMinutes > 0L }
     val topArtists = globalArtists.entries
@@ -359,13 +432,49 @@ fun calculateAllTimeWrappedSummary(
         .take(4)
 
     return AllTimeWrappedSummary(
-        monthsTracked = nonEmptyMonths.size,
+        monthsTracked = maxOf(nonEmptyMonths.size, if (longestStreak != null) 1 else 0),
         totalGroupMinutes = standings.sumOf { it.totalMinutes },
         totalGroupTracks = standings.sumOf { it.totalTracks },
         topListener = topListener,
         topArtists = topArtists,
         standings = standings,
+        longestStreak = longestStreak,
     )
+}
+
+fun buildReceiptReferenceCode(monthId: String, memberKey: String): String {
+    val cleanMonth = monthId.replace("-", "").take(6)
+    val shortMember = memberKey.take(4).uppercase(Locale.US)
+    return "ATP-$cleanMonth-$shortMember"
+}
+
+fun buildVerifiedPaymentReceiptText(
+    month: PaymentMonth,
+    member: MemberPaymentStatus,
+    streakCount: Int = 0,
+    planName: String = AtaPotifyConstants.DEFAULT_PLAN_NAME,
+): String {
+    val refCode = buildReceiptReferenceCode(month.monthId, member.memberKey)
+    val confirmedDateStr = member.confirmedAt?.toDate()?.let {
+        SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
+    } ?: "Verified by Admin"
+    val methodStr = if (member.hasReceipt) "Bank Transfer Slip (Verified)" else "Direct Admin Confirmation"
+
+    return buildString {
+        appendLine("✅ *ATAPOTIFY VERIFIED RECEIPT*")
+        appendLine("Ref: `#$refCode`")
+        appendLine("────────────────────")
+        appendLine("• *Member:* ${member.displayName}")
+        appendLine("• *Plan:* $planName")
+        appendLine("• *Billing Cycle:* ${month.displayLabel} (${month.monthId})")
+        appendLine("• *Amount Paid:* LKR ${member.amountLkr}")
+        appendLine("• *Status:* PAID & SETTLED")
+        appendLine("• *Method:* $methodStr")
+        appendLine("• *Verified On:* $confirmedDateStr")
+        if (streakCount >= 2) {
+            appendLine("• *Payment Streak:* 🔥 $streakCount consecutive months")
+        }
+    }.trim()
 }
 
 fun buildWhatsAppMonthlySummaryText(

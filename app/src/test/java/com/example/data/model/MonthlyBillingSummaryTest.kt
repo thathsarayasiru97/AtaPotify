@@ -137,4 +137,58 @@ class MonthlyBillingSummaryTest {
         assertEquals(1200L, wrapped.topListener?.totalMinutes)
         assertEquals("Daft Punk", wrapped.topListener?.favoriteArtist)
     }
+
+    @Test
+    fun calculatesConsecutivePaymentStreaksAndLongestStreakStanding() {
+        val months = listOf(
+            PaymentMonth(monthId = "2026-11", displayLabel = "November 2026"),
+            PaymentMonth(monthId = "2026-10", displayLabel = "October 2026"),
+            PaymentMonth(monthId = "2026-09", displayLabel = "September 2026"),
+        )
+        val membersByMonth = mapOf(
+            "2026-09" to listOf(
+                MemberPaymentStatus(memberKey = "alice", displayName = "Alice", status = AtaPotifyConstants.STATUS_PAID),
+                MemberPaymentStatus(memberKey = "bob", displayName = "Bob", status = AtaPotifyConstants.STATUS_PAID),
+            ),
+            "2026-10" to listOf(
+                MemberPaymentStatus(memberKey = "alice", displayName = "Alice", status = AtaPotifyConstants.STATUS_PAID),
+                MemberPaymentStatus(memberKey = "bob", displayName = "Bob", status = AtaPotifyConstants.STATUS_PENDING),
+            ),
+            "2026-11" to listOf(
+                MemberPaymentStatus(memberKey = "alice", displayName = "Alice", status = AtaPotifyConstants.STATUS_PENDING),
+                MemberPaymentStatus(memberKey = "bob", displayName = "Bob", status = AtaPotifyConstants.STATUS_PAID),
+            ),
+        )
+
+        val streaks = calculatePaymentStreaks(months, membersByMonth)
+        // Alice paid 2026-10 and 2026-09, and 2026-11 is still pending (doesn't break her prior streak)
+        assertEquals(2, streaks["alice"])
+        // Bob paid 2026-11, but missed 2026-10, so streak stops at 1
+        assertEquals(1, streaks["bob"])
+
+        val longest = checkNotNull(calculateLongestStreakStanding(months, membersByMonth))
+        assertEquals("Alice", longest.displayName)
+        assertEquals(2, longest.streakMonths)
+    }
+
+    @Test
+    fun buildsDigitalVerifiedPaymentReceiptTextWithRefAndStreak() {
+        val month = PaymentMonth(monthId = "2026-11", displayLabel = "November 2026", amountLkr = 450L)
+        val member = MemberPaymentStatus(
+            memberKey = "alice_key",
+            memberEmail = "alice@gmail.com",
+            displayName = "Alice",
+            status = AtaPotifyConstants.STATUS_PAID,
+            amountLkr = 450L,
+            hasReceipt = true,
+        )
+
+        val receiptText = buildVerifiedPaymentReceiptText(month = month, member = member, streakCount = 3)
+        org.junit.Assert.assertTrue(receiptText.contains("ATAPOTIFY VERIFIED RECEIPT"))
+        org.junit.Assert.assertTrue(receiptText.contains("#ATP-202611-ALIC"))
+        org.junit.Assert.assertTrue(receiptText.contains("LKR 450"))
+        org.junit.Assert.assertTrue(receiptText.contains("PAID & SETTLED"))
+        org.junit.Assert.assertTrue(receiptText.contains("3 consecutive months"))
+    }
 }
+

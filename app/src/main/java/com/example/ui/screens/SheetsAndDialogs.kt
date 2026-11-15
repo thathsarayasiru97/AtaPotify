@@ -93,8 +93,34 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceElevated
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Verified
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import com.example.data.model.buildReceiptReferenceCode
+import com.example.ui.components.AnimatedStreakBadge
+import com.example.ui.theme.EmeraldSoftText
+import com.example.ui.theme.MonoNumericLarge
+import com.example.ui.theme.MonoNumericSmall
 import com.example.ui.viewmodel.OverdueReminderCandidate
 import com.example.ui.viewmodel.ReceiptDialogState
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1471,6 +1497,239 @@ fun AdvancePaymentDialog(
             }
         },
     )
+}
+
+@Composable
+fun VerifiedPaymentReceiptDialog(
+    month: PaymentMonth,
+    member: MemberPaymentStatus,
+    streakCount: Int = 0,
+    canViewSlip: Boolean = false,
+    onShareReceipt: () -> Unit,
+    onViewUploadedSlip: () -> Unit = {},
+    onDismiss: () -> Unit,
+) {
+    val refCode = remember(month.monthId, member.memberKey) {
+        buildReceiptReferenceCode(month.monthId, member.memberKey)
+    }
+    val verifiedDateStr = remember(member.confirmedAt, member.updatedAt) {
+        val ts = member.confirmedAt ?: member.updatedAt
+        if (ts != null) {
+            SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(ts.toDate())
+        } else {
+            "Verified by Admin"
+        }
+    }
+
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+
+    val sealScale by animateFloatAsState(
+        targetValue = if (entered) 1f else 0.4f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "verified_seal_scale",
+    )
+
+    val infiniteTransition = rememberInfiniteTransition(label = "receipt_glow_anim")
+    val borderGlowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "receipt_border_glow",
+    )
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("verified_payment_receipt_dialog"),
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+            border = BorderStroke(1.5.dp, SpotifyEmerald.copy(alpha = borderGlowAlpha)),
+            shape = RoundedCornerShape(24.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color(0xFF143823), SurfaceDark, ObsidianBg),
+                        )
+                    )
+                    .padding(20.dp),
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Surface(
+                            color = EmeraldContainer,
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(1.dp, SpotifyEmerald.copy(alpha = 0.45f)),
+                        ) {
+                            Text(
+                                text = refCode,
+                                style = MonoNumericSmall.copy(fontSize = 11.sp),
+                                color = SpotifyEmerald,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = stringResource(R.string.cd_close),
+                                tint = TextSecondary,
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .scale(sealScale)
+                            .clip(CircleShape)
+                            .background(EmeraldContainer),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Verified,
+                            contentDescription = "Verified Payment Seal",
+                            tint = SpotifyEmerald,
+                            modifier = Modifier.size(36.dp),
+                        )
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "VERIFIED PAYMENT RECEIPT",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = EmeraldSoftText,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "LKR ${member.amountLkr}",
+                            style = MonoNumericLarge.copy(fontSize = 28.sp),
+                            color = SpotifyEmerald,
+                        )
+                        if (streakCount >= 1) {
+                            Spacer(Modifier.height(2.dp))
+                            AnimatedStreakBadge(streakCount = streakCount)
+                        }
+                    }
+
+                    Surface(
+                        color = SurfaceElevated.copy(alpha = 0.85f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, BorderSubtle),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            ReceiptMetaRow(label = "Member", value = member.displayName)
+                            HorizontalDivider(color = BorderSubtle)
+                            ReceiptMetaRow(label = "Billing Cycle", value = "${month.displayLabel} (${month.monthId})")
+                            HorizontalDivider(color = BorderSubtle)
+                            ReceiptMetaRow(
+                                label = "Verification",
+                                value = if (member.hasReceipt) "Bank Slip Verified" else "Confirmed by Admin",
+                            )
+                            HorizontalDivider(color = BorderSubtle)
+                            ReceiptMetaRow(label = "Confirmed On", value = verifiedDateStr)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        if (canViewSlip && member.hasReceipt) {
+                            OutlinedButton(
+                                onClick = onViewUploadedSlip,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("verified_receipt_view_slip_button"),
+                                border = BorderStroke(1.dp, BorderSubtle),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ReceiptLong,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Bank Slip", color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+
+                        Button(
+                            onClick = onShareReceipt,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("verified_receipt_share_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SpotifyEmerald,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("Share Receipt")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReceiptMetaRow(
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextSecondary,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
 }
 
 

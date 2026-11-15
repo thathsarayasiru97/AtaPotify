@@ -1,5 +1,6 @@
-### What's New in v1.3.5
-- **Approval Mode Onboarding**: Anyone can install and sign in with Google; join requests go straight to the Admin panel while members see an auto-unlocking **Awaiting for Approval** screen.
-- **Billing Cycle Notification Reminders**: Automatic Android notifications alert members when a new billing cycle begins and their payment is pending (and notify Admin on new join requests).
-- **Leaderboard Cleanup**: Removed `LKR/hr` value metrics from the leaderboard and All-Time Wrapped card in favor of clean relative listening progress bars.
-- **Rich UI Animations**: Added smooth tab & auth transitions, animated progress bars and counters, pulsing approval radar rings, and animated list items.
+### What's New in v1.3.6
+- **Admin Pinned Board Announcements**: Admin can broadcast a live pinned banner at the top of the Board tab with an animated megaphone indicator and one-tap clear.
+- **Payment Streak Badges (`🔥 N-mo streak`)**: Automatically tracks consecutive paid billing cycles per member on Board & History cards and highlights the **Longest Payment Streak** in All-Time Wrapped.
+- **Digital Verified Payment Receipts**: Paid members can tap their `Paid` status pill or **Verified Receipt** button to open and share a digital receipt card (`#ATP-YYYYMM-XXXX`) to WhatsApp.
+- **Family Mix & One-Tap Open in Spotify**: Added the **Family Mix — On Repeat** card and tappable artist/track chips that open directly in Spotify.
+- **Comprehensive UI Animations**: Added live 4-bar equalizer animations, drifting aurora hero gradients, spring-physics press interactions, and animated verified receipt seals.

@@ -747,6 +747,43 @@ class PaymentRepository(
         }
     }
 
+    suspend fun updatePinnedAnnouncement(
+        announcement: String,
+        existingAllowedEmails: List<String>,
+    ): Result<Unit> {
+        requireUserId()
+        val cleanAnnouncement = announcement.trim().take(280)
+        val configRef = db.collection("plan_config").document(AtaPotifyConstants.PLAN_CONFIG_DOC_ID)
+        return try {
+            val snap = configRef.get().await()
+            if (snap.exists()) {
+                configRef.update(
+                    mapOf(
+                        "pinnedAnnouncement" to cleanAnnouncement,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                ).await()
+            } else {
+                configRef.set(
+                    mapOf(
+                        "planName" to AtaPotifyConstants.DEFAULT_PLAN_NAME,
+                        "monthlyAmountLkr" to AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
+                        "currency" to AtaPotifyConstants.CURRENCY_LKR,
+                        "allowedEmails" to existingAllowedEmails.take(25),
+                        "pinnedAnnouncement" to cleanAnnouncement,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                ).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, configRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
     suspend fun confirmAdvancePaymentMonths(
         startMonth: PaymentMonth,
         member: MemberPaymentStatus,
@@ -885,6 +922,29 @@ class PaymentRepository(
                 emptyList()
             }
             result[month.monthId] = stats
+        }
+        return result
+    }
+
+    suspend fun fetchAllMonthsMembers(
+        months: List<PaymentMonth>,
+        userEmailLower: String,
+        isAdmin: Boolean,
+    ): Map<String, List<MemberPaymentStatus>> {
+        if (auth.currentUser == null || months.isEmpty()) return emptyMap()
+        val result = mutableMapOf<String, List<MemberPaymentStatus>>()
+        for (month in months.take(12)) {
+            val baseCol = db.collection("payments").document(month.monthId).collection("members")
+            val query = if (isAdmin) baseCol else baseCol.whereArrayContains("allowedEmails", userEmailLower)
+            val members = try {
+                query.get().await()
+                    .toObjects(MemberPaymentStatus::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyList()
+            }
+            result[month.monthId] = members
         }
         return result
     }

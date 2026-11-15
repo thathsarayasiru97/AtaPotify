@@ -104,6 +104,7 @@ import com.example.data.service.SpotifyStatsService
 import com.example.data.worker.BillingReminderNotifier
 import com.example.data.worker.BillingReminderScheduler
 import com.example.data.worker.SpotifySyncScheduler
+import com.example.ui.components.AnimatedEqualizerBars
 import com.example.ui.screens.AccessDeniedScreen
 import com.example.ui.screens.AddMemberToMonthDialog
 import com.example.ui.screens.AdminScreen
@@ -122,6 +123,7 @@ import com.example.ui.screens.SignInScreen
 import com.example.ui.screens.SpotifyEmailOnboardingDialog
 import com.example.ui.screens.SpotifySetupHintDialog
 import com.example.ui.screens.StartNewMonthDialog
+import com.example.ui.screens.VerifiedPaymentReceiptDialog
 import com.example.ui.screens.WhitelistMemberDialog
 import com.example.ui.screens.attemptAutoSignIn
 import com.example.ui.screens.signOutFromApp
@@ -366,6 +368,7 @@ private fun MainAppScaffold(
     val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
     val needsSpotifyEmailPrompt by viewModel.needsSpotifyEmailPrompt.collectAsStateWithLifecycle()
     val allTimeWrapped by viewModel.allTimeWrapped.collectAsStateWithLifecycle()
+    val paymentStreaks by viewModel.paymentStreaks.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.BOARD) }
     var notificationsEnabled by remember {
@@ -378,6 +381,7 @@ private fun MainAppScaffold(
     var editingWhitelistMember by remember { mutableStateOf<WhitelistMember?>(null) }
     var editingPaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
     var advancePaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
+    var verifiedReceiptContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
     var deletingPaymentContext by remember { mutableStateOf<Triple<PaymentMonth, MemberPaymentStatus, List<MemberPaymentStatus>>?>(null) }
     var addMemberTargetContext by remember { mutableStateOf<Pair<PaymentMonth, List<MemberPaymentStatus>>?>(null) }
     var deletingMonthContext by remember { mutableStateOf<Triple<PaymentMonth, List<MemberPaymentStatus>, List<ListeningStat>>?>(null) }
@@ -482,12 +486,16 @@ private fun MainAppScaffold(
                                         .background(EmeraldContainer),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.GraphicEq,
-                                        contentDescription = stringResource(R.string.cd_app_emblem),
-                                        tint = SpotifyEmerald,
-                                        modifier = Modifier.size(18.dp),
-                                    )
+                                    if (spotifyConnected) {
+                                        AnimatedEqualizerBars(isActive = true)
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.GraphicEq,
+                                            contentDescription = stringResource(R.string.cd_app_emblem),
+                                            tint = SpotifyEmerald,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
                                 }
                                 Column {
                                     Text(
@@ -674,6 +682,7 @@ private fun MainAppScaffold(
                             overdueReminders = overdueReminders,
                             defaultAmountLkr = planConfig.monthlyAmountLkr,
                             planConfig = planConfig,
+                            paymentStreaks = paymentStreaks,
                             spotifyConnected = spotifyConnected,
                             spotifyName = spotifyName,
                             isSpotifyClientConfigured = viewModel.isSpotifyClientConfigured,
@@ -697,6 +706,11 @@ private fun MainAppScaffold(
                             onViewSlip = { member ->
                                 currentMonth?.let { month ->
                                     viewModel.openReceiptViewer(month.monthId, member)
+                                }
+                            },
+                            onOpenVerifiedReceipt = { member ->
+                                currentMonth?.let { month ->
+                                    verifiedReceiptContext = month to member
                                 }
                             },
                             onConfirmPaid = { member ->
@@ -730,6 +744,7 @@ private fun MainAppScaffold(
                                 }
                             },
                             onCopyText = copyToClipboard,
+                            onClearAnnouncement = { viewModel.updatePinnedAnnouncement("") },
                             onShareMonthlySummary = {
                                 currentMonth?.let { month ->
                                     viewModel.shareMonthlySummaryToWhatsApp(
@@ -744,6 +759,7 @@ private fun MainAppScaffold(
                             onConnectSpotify = { viewModel.launchSpotifyConnect(context) },
                             onSyncSpotify = { viewModel.syncSpotifyStats() },
                             onShowSpotifySetupHint = { showSpotifyHintDialog = true },
+                            onOpenSpotifyQuery = { query -> viewModel.openInSpotifySearch(context, query) },
                         )
 
                         AppTab.HISTORY -> HistoryScreen(
@@ -754,6 +770,7 @@ private fun MainAppScaffold(
                             members = historyMonthMembers,
                             stats = historyMonthStats,
                             whitelist = whitelist,
+                            paymentStreaks = paymentStreaks,
                             allTimeWrapped = allTimeWrapped,
                             isBusy = isBusy,
                             onSelectMonth = { viewModel.selectHistoryMonth(it) },
@@ -774,6 +791,11 @@ private fun MainAppScaffold(
                             onViewSlip = { member ->
                                 selectedHistoryMonth?.let { month ->
                                     viewModel.openReceiptViewer(month.monthId, member)
+                                }
+                            },
+                            onOpenVerifiedReceipt = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    verifiedReceiptContext = month to member
                                 }
                             },
                             onConfirmPaid = { member ->
@@ -811,6 +833,7 @@ private fun MainAppScaffold(
                                     viewModel.sendWhatsAppReminder(context, month, member, phone)
                                 }
                             },
+                            onOpenSpotifyQuery = { query -> viewModel.openInSpotifySearch(context, query) },
                         )
 
                         AppTab.ADMIN -> AdminScreen(
@@ -826,6 +849,9 @@ private fun MainAppScaffold(
                             },
                             onSaveBankDetails = { bankName, accNo, holder, branch ->
                                 viewModel.updateBankDetails(bankName, accNo, holder, branch)
+                            },
+                            onSavePinnedAnnouncement = { text ->
+                                viewModel.updatePinnedAnnouncement(text)
                             },
                             onCopyText = copyToClipboard,
                             onAddMemberClick = {
@@ -881,6 +907,24 @@ private fun MainAppScaffold(
                 onSignOut()
             },
             onDismiss = { showProfileSheet = false },
+        )
+    }
+
+    verifiedReceiptContext?.let { (month, member) ->
+        val isSelf = member.memberEmail.equals(session.email, ignoreCase = true)
+        VerifiedPaymentReceiptDialog(
+            month = month,
+            member = member,
+            streakCount = paymentStreaks[member.memberKey] ?: 0,
+            canViewSlip = (isSelf || session.isAdmin) && member.hasReceipt,
+            onShareReceipt = {
+                viewModel.shareVerifiedReceiptToWhatsApp(context, month, member)
+            },
+            onViewUploadedSlip = {
+                verifiedReceiptContext = null
+                viewModel.openReceiptViewer(month.monthId, member)
+            },
+            onDismiss = { verifiedReceiptContext = null },
         )
     }
 

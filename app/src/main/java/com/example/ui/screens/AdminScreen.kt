@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -84,6 +85,7 @@ fun AdminScreen(
     onDeclineRequest: (AccessRequest) -> Unit = {},
     onSaveLkrRate: (Long, Boolean) -> Unit,
     onSaveBankDetails: (bankName: String, accountNumber: String, accountHolder: String, branch: String) -> Unit = { _, _, _, _ -> },
+    onSavePinnedAnnouncement: (String) -> Unit = {},
     onCopyText: (label: String, text: String) -> Unit = { _, _ -> },
     onAddMemberClick: () -> Unit,
     onEditMemberClick: (WhitelistMember) -> Unit,
@@ -99,6 +101,9 @@ fun AdminScreen(
     var bankAccountNumber by remember(planConfig.bankAccountNumber) { mutableStateOf(planConfig.bankAccountNumber) }
     var bankAccountHolder by remember(planConfig.bankAccountHolder) { mutableStateOf(planConfig.bankAccountHolder) }
     var bankBranch by remember(planConfig.bankBranch) { mutableStateOf(planConfig.bankBranch) }
+    var announcementInput by remember(planConfig.pinnedAnnouncement) {
+        mutableStateOf(planConfig.pinnedAnnouncement)
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -239,6 +244,99 @@ fun AdminScreen(
                             )
                             Spacer(Modifier.width(8.dp))
                             Text("Save LKR Rate")
+                        }
+                    }
+                }
+            }
+
+            item(key = "pinned_announcement_card") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    border = BorderStroke(1.dp, BorderSubtle),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Campaign,
+                                contentDescription = null,
+                                tint = SpotifyEmerald,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Column {
+                                Text(
+                                    text = "Pinned Board Announcement",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = "Broadcast a live banner at the top of the Board tab for all family members.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextSecondary,
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = announcementInput,
+                            onValueChange = { announcementInput = it.take(280) },
+                            label = { Text("Announcement Message (e.g. Pay before the 5th!)") },
+                            supportingText = { Text("${announcementInput.length} / 280 chars") },
+                            maxLines = 3,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_announcement_input"),
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (planConfig.hasPinnedAnnouncement || announcementInput.isNotBlank()) {
+                                OutlinedButton(
+                                    onClick = {
+                                        announcementInput = ""
+                                        onSavePinnedAnnouncement("")
+                                    },
+                                    enabled = !isBusy,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("clear_announcement_button"),
+                                    border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.5f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Text("Clear", color = CoralPending)
+                                }
+                            }
+                            Button(
+                                onClick = { onSavePinnedAnnouncement(announcementInput) },
+                                enabled = !isBusy && announcementInput.trim().isNotBlank(),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("save_announcement_button"),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = SpotifyEmerald,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Campaign,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Pin to Board")
+                            }
                         }
                     }
                 }

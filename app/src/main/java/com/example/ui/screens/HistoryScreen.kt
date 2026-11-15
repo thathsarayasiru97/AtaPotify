@@ -1,6 +1,11 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -25,9 +30,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
@@ -46,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -63,6 +71,10 @@ import com.example.data.model.PaymentMonth
 import com.example.data.model.WhitelistMember
 import com.example.data.model.calculateMonthlyBillingSummary
 import com.example.data.repository.AccessResolution
+import com.example.ui.components.AnimatedStreakBadge
+import com.example.ui.components.pressBounceClickable
+import com.example.ui.theme.AmberContainer
+import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.CoralPending
 import com.example.ui.theme.EmeraldContainer
@@ -83,6 +95,7 @@ fun HistoryScreen(
     members: List<MemberPaymentStatus>,
     stats: List<ListeningStat>,
     whitelist: List<WhitelistMember>,
+    paymentStreaks: Map<String, Int> = emptyMap(),
     allTimeWrapped: AllTimeWrappedSummary? = null,
     isBusy: Boolean,
     onSelectMonth: (String) -> Unit,
@@ -90,6 +103,7 @@ fun HistoryScreen(
     onDeleteMonth: (PaymentMonth) -> Unit,
     onShareMonthSummary: (PaymentMonth) -> Unit = {},
     onViewSlip: (MemberPaymentStatus) -> Unit,
+    onOpenVerifiedReceipt: (MemberPaymentStatus) -> Unit = {},
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
     onAdvancePayClick: (MemberPaymentStatus) -> Unit = {},
     onRewindPaid: (MemberPaymentStatus) -> Unit,
@@ -97,6 +111,7 @@ fun HistoryScreen(
     onEditPayment: (MemberPaymentStatus) -> Unit,
     onDeletePayment: (MemberPaymentStatus) -> Unit,
     onRemindMember: (MemberPaymentStatus, String) -> Unit,
+    onOpenSpotifyQuery: (String) -> Unit = {},
 ) {
     val phoneByKey = remember(whitelist) {
         whitelist.associate { it.memberKey to it.phone }
@@ -139,7 +154,10 @@ fun HistoryScreen(
 
             if (allTimeWrapped != null) {
                 item {
-                    AllTimeWrappedCard(summary = allTimeWrapped)
+                    AllTimeWrappedCard(
+                        summary = allTimeWrapped,
+                        onOpenSpotifyQuery = onOpenSpotifyQuery,
+                    )
                 }
             }
 
@@ -284,15 +302,18 @@ fun HistoryScreen(
                     items(members, key = { "hist_${selectedMonth.monthId}_${it.memberKey}" }) { member ->
                         val isSelf = member.memberEmail.equals(session.email, ignoreCase = true)
                         val phone = phoneByKey[member.memberKey].orEmpty()
+                        val streak = paymentStreaks[member.memberKey] ?: 0
                         MemberPaymentCard(
                             member = member,
                             isSelf = isSelf,
                             isAdmin = session.isAdmin,
                             whatsappDigits = phone,
+                            streakCount = streak,
                             isBusy = isBusy,
                             modifier = Modifier.animateItem(),
                             onUploadSlipClick = {},
                             onViewSlipClick = { onViewSlip(member) },
+                            onOpenVerifiedReceiptClick = { onOpenVerifiedReceipt(member) },
                             onMarkPaidClick = { onConfirmPaid(member) },
                             onAdvancePayClick = { onAdvancePayClick(member) },
                             onRewindPaidClick = { onRewindPaid(member) },
@@ -324,6 +345,7 @@ fun HistoryScreen(
                                 maxMinutes = topHistMinutes,
                                 isSelf = stat.memberEmail.equals(session.email, ignoreCase = true),
                                 isAdminEntry = stat.memberEmail.equals(AtaPotifyConstants.ADMIN_EMAIL, ignoreCase = true),
+                                onOpenInSpotify = onOpenSpotifyQuery,
                                 modifier = Modifier.animateItem(),
                             )
                         }
@@ -338,7 +360,10 @@ fun HistoryScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
+private fun AllTimeWrappedCard(
+    summary: AllTimeWrappedSummary,
+    onOpenSpotifyQuery: (String) -> Unit = {},
+) {
     val animatedMinutes by animateIntAsState(
         targetValue = summary.totalGroupMinutes.toInt(),
         animationSpec = tween(durationMillis = 650),
@@ -353,6 +378,17 @@ private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
         String.format(java.util.Locale.US, "%.1f", summary.totalGroupMinutes / 60.0)
     }
 
+    val infiniteTransition = rememberInfiniteTransition(label = "wrapped_aurora_anim")
+    val auroraShift by infiniteTransition.animateFloat(
+        initialValue = 90f,
+        targetValue = 480f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 4600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "wrapped_aurora_shift",
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -365,8 +401,10 @@ private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    Brush.linearGradient(
-                        colors = listOf(Color(0xFF133822), SurfaceDark),
+                    Brush.radialGradient(
+                        colors = listOf(Color(0xFF19492C), Color(0xFF133822), SurfaceDark),
+                        center = Offset(auroraShift, 100f),
+                        radius = 780f,
                     )
                 )
                 .padding(18.dp),
@@ -478,6 +516,59 @@ private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
                     }
                 }
 
+                summary.longestStreak?.let { streak ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("wrapped_longest_streak_tile"),
+                        color = SurfaceElevated,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.4f)),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(CircleShape)
+                                        .background(AmberContainer),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.LocalFireDepartment,
+                                        contentDescription = null,
+                                        tint = AmberWarning,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = "Longest Payment Streak",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextSecondary,
+                                    )
+                                    Text(
+                                        text = streak.displayName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                            AnimatedStreakBadge(streakCount = streak.streakMonths)
+                        }
+                    }
+                }
+
                 if (summary.topArtists.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -487,13 +578,25 @@ private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
                             Surface(
                                 color = EmeraldContainer,
                                 shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier.pressBounceClickable { onOpenSpotifyQuery(artist) },
                             ) {
-                                Text(
-                                    text = "Top Artist: $artist",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = SpotifyEmerald,
+                                Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                )
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        text = "Top Artist: $artist",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = SpotifyEmerald,
+                                    )
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                        contentDescription = "Open $artist in Spotify",
+                                        tint = SpotifyEmerald,
+                                        modifier = Modifier.size(11.dp),
+                                    )
+                                }
                             }
                         }
                     }

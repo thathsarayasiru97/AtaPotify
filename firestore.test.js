@@ -380,6 +380,15 @@ test("Admin can create month batch, confirm payment, log reminder, and update LK
       bankAccountNumber: "8001234567",
       bankAccountHolder: "Y. Thathsara",
       bankBranch: "Galle",
+      pinnedAnnouncement: "Please use Commercial Bank account this cycle!",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Oversized pinnedAnnouncement (>280 chars) is rejected
+  await assertFails(
+    adminDb.collection("plan_config").doc("settings").update({
+      pinnedAnnouncement: "x".repeat(285),
       updatedAt: new Date(),
     })
   );

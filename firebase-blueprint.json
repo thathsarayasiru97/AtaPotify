@@ -29,6 +29,7 @@
         "bankAccountNumber": { "type": "string", "description": "Bank account number for monthly transfer" },
         "bankAccountHolder": { "type": "string", "description": "Bank account holder name" },
         "bankBranch": { "type": "string", "description": "Bank branch name" },
+        "pinnedAnnouncement": { "type": "string", "description": "Optional admin-pinned notice shown at the top of the Board" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
       },
       "required": ["planName", "monthlyAmountLkr", "currency", "allowedEmails", "updatedAt"]

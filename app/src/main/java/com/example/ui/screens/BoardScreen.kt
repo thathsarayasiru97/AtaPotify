@@ -6,13 +6,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +36,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -54,6 +60,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -104,6 +111,12 @@ import com.example.data.model.PlanConfig
 import com.example.data.model.WhitelistMember
 import com.example.data.model.calculateMonthlyBillingSummary
 import com.example.data.repository.AccessResolution
+import androidx.compose.ui.geometry.Offset
+import com.example.ui.components.AnimatedEqualizerBars
+import com.example.ui.components.AnimatedStreakBadge
+import com.example.ui.components.FamilyMixCard
+import com.example.ui.components.PinnedAnnouncementBanner
+import com.example.ui.components.pressBounceClickable
 import com.example.ui.theme.AmberContainer
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.BorderSubtle
@@ -139,6 +152,7 @@ fun BoardScreen(
     overdueReminders: List<OverdueReminderCandidate>,
     defaultAmountLkr: Long,
     planConfig: PlanConfig = PlanConfig(),
+    paymentStreaks: Map<String, Int> = emptyMap(),
     spotifyConnected: Boolean,
     spotifyName: String,
     isSpotifyClientConfigured: Boolean,
@@ -148,6 +162,7 @@ fun BoardScreen(
     onDeleteCurrentMonth: () -> Unit,
     onUploadSlip: (android.net.Uri, MemberPaymentStatus) -> Unit,
     onViewSlip: (MemberPaymentStatus) -> Unit,
+    onOpenVerifiedReceipt: (MemberPaymentStatus) -> Unit = {},
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
     onAdvancePayClick: (MemberPaymentStatus) -> Unit = {},
     onRewindPaid: (MemberPaymentStatus) -> Unit,
@@ -155,11 +170,13 @@ fun BoardScreen(
     onDeletePayment: (MemberPaymentStatus) -> Unit,
     onRemindMember: (MemberPaymentStatus, String) -> Unit,
     onCopyText: (String, String) -> Unit = { _, _ -> },
+    onClearAnnouncement: () -> Unit = {},
     onShareMonthlySummary: () -> Unit = {},
     onOpenOverdueQueue: () -> Unit,
     onConnectSpotify: () -> Unit,
     onSyncSpotify: () -> Unit,
     onShowSpotifySetupHint: () -> Unit,
+    onOpenSpotifyQuery: (String) -> Unit = {},
 ) {
     var selectedSection by remember { mutableIntStateOf(0) } // 0 = Payments, 1 = Leaderboard
     var pendingUploadTarget by remember { mutableStateOf<MemberPaymentStatus?>(null) }
@@ -212,6 +229,17 @@ fun BoardScreen(
                     onStartNewMonth = onOpenStartMonth,
                     onShareMonthlySummary = onShareMonthlySummary,
                 )
+            }
+
+            if (planConfig.hasPinnedAnnouncement) {
+                item(key = "pinned_announcement_banner") {
+                    PinnedAnnouncementBanner(
+                        announcement = planConfig.pinnedAnnouncement,
+                        isAdmin = session.isAdmin,
+                        onClearAnnouncement = onClearAnnouncement,
+                        modifier = Modifier.animateItem(),
+                    )
+                }
             }
 
             if (session.isAdmin && overdueReminders.isNotEmpty()) {
@@ -350,11 +378,13 @@ fun BoardScreen(
                 items(members, key = { it.memberKey }) { member ->
                     val isSelf = member.memberEmail.equals(session.email, ignoreCase = true)
                     val phone = phoneByKey[member.memberKey].orEmpty()
+                    val streak = paymentStreaks[member.memberKey] ?: 0
                     MemberPaymentCard(
                         member = member,
                         isSelf = isSelf,
                         isAdmin = session.isAdmin,
                         whatsappDigits = phone,
+                        streakCount = streak,
                         isBusy = isBusy,
                         modifier = Modifier.animateItem(),
                         onUploadSlipClick = {
@@ -364,6 +394,7 @@ fun BoardScreen(
                             )
                         },
                         onViewSlipClick = { onViewSlip(member) },
+                        onOpenVerifiedReceiptClick = { onOpenVerifiedReceipt(member) },
                         onMarkPaidClick = { onConfirmPaid(member) },
                         onAdvancePayClick = { onAdvancePayClick(member) },
                         onRewindPaidClick = { onRewindPaid(member) },
@@ -389,6 +420,16 @@ fun BoardScreen(
                     }
                 }
 
+                if (leaderboardRoster.any { it.topTrack.isNotBlank() || it.topArtist.isNotBlank() }) {
+                    item(key = "family_mix_card") {
+                        FamilyMixCard(
+                            stats = leaderboardRoster,
+                            onOpenInSpotify = onOpenSpotifyQuery,
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                }
+
                 if (leaderboardRoster.isEmpty()) {
                     item(key = "empty_leaderboard") {
                         Box(modifier = Modifier.animateItem()) {
@@ -404,6 +445,7 @@ fun BoardScreen(
                             maxMinutes = topMinutes,
                             isSelf = stat.memberEmail.equals(session.email, ignoreCase = true),
                             isAdminEntry = stat.memberEmail.equals(AtaPotifyConstants.ADMIN_EMAIL, ignoreCase = true),
+                            onOpenInSpotify = onOpenSpotifyQuery,
                             modifier = Modifier.animateItem(),
                         )
                     }
@@ -425,6 +467,25 @@ private fun MonthHeroCard(
     onShareMonthlySummary: () -> Unit,
 ) {
     val amountLkr = month?.amountLkr ?: defaultAmountLkr
+    val infiniteTransition = rememberInfiniteTransition(label = "hero_aurora_anim")
+    val auroraShift by infiniteTransition.animateFloat(
+        initialValue = 120f,
+        targetValue = 540f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 4800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "hero_aurora_shift",
+    )
+    val auroraRadius by infiniteTransition.animateFloat(
+        initialValue = 680f,
+        targetValue = 920f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "hero_aurora_radius",
+    )
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -437,8 +498,9 @@ private fun MonthHeroCard(
                 .fillMaxWidth()
                 .background(
                     Brush.radialGradient(
-                        colors = listOf(Color(0xFF1A432A), SurfaceDark),
-                        radius = 750f,
+                        colors = listOf(Color(0xFF1E5233), Color(0xFF143521), SurfaceDark),
+                        center = Offset(auroraShift, 120f),
+                        radius = auroraRadius,
                     )
                 )
                 .padding(20.dp),
@@ -1252,10 +1314,12 @@ fun MemberPaymentCard(
     isSelf: Boolean,
     isAdmin: Boolean,
     whatsappDigits: String,
+    streakCount: Int = 0,
     isBusy: Boolean,
     modifier: Modifier = Modifier,
     onUploadSlipClick: () -> Unit,
     onViewSlipClick: () -> Unit,
+    onOpenVerifiedReceiptClick: () -> Unit = {},
     onMarkPaidClick: () -> Unit,
     onAdvancePayClick: () -> Unit = {},
     onRewindPaidClick: () -> Unit = {},
@@ -1330,6 +1394,9 @@ fun MemberPaymentCard(
                                 )
                             }
                         }
+                        if (streakCount >= 1) {
+                            AnimatedStreakBadge(streakCount = streakCount)
+                        }
                     }
 
                     Row(
@@ -1380,7 +1447,10 @@ fun MemberPaymentCard(
                     }
                 }
 
-                StatusPill(status = member.status)
+                StatusPill(
+                    status = member.status,
+                    onClick = if (member.status == AtaPotifyConstants.STATUS_PAID) onOpenVerifiedReceiptClick else null,
+                )
 
                 if (isAdmin) {
                     Box {
@@ -1470,10 +1540,11 @@ fun MemberPaymentCard(
                 }
             }
 
-            // Primary action row for Self or Admin
+            // Primary action row for Self, Paid Receipt, or Admin
             val hasPrimaryRow = (isSelf && member.status != AtaPotifyConstants.STATUS_PAID) ||
                 ((isSelf || isAdmin) && member.hasReceipt) ||
-                (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID)
+                (isAdmin && member.status != AtaPotifyConstants.STATUS_PAID) ||
+                ((isSelf || isAdmin) && member.status == AtaPotifyConstants.STATUS_PAID)
 
             AnimatedVisibility(visible = hasPrimaryRow) {
                 Row(
@@ -1556,6 +1627,29 @@ fun MemberPaymentCard(
                         }
                     }
 
+                    if ((isSelf || isAdmin) && member.status == AtaPotifyConstants.STATUS_PAID) {
+                        FilledTonalButton(
+                            onClick = onOpenVerifiedReceiptClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .minimumInteractiveComponentSize()
+                                .testTag("verified_receipt_${member.memberKey}"),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = EmeraldContainer,
+                                contentColor = SpotifyEmerald,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Verified,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("Verified Receipt")
+                        }
+                    }
+
                     if (isAdmin && member.status == AtaPotifyConstants.STATUS_PENDING) {
                         OutlinedButton(
                             onClick = onRemindClick,
@@ -1607,7 +1701,10 @@ fun MemberPaymentCard(
 }
 
 @Composable
-fun StatusPill(status: String) {
+fun StatusPill(
+    status: String,
+    onClick: (() -> Unit)? = null,
+) {
     val (label, targetFg, targetBg, icon) = when (status) {
         AtaPotifyConstants.STATUS_PAID -> Quad(
             stringResource(R.string.status_paid),
@@ -1648,10 +1745,18 @@ fun StatusPill(status: String) {
         label = "pill_scale",
     )
 
+    val pillModifier = if (onClick != null) {
+        Modifier
+            .scale(bounceScale)
+            .pressBounceClickable(onClick = onClick)
+    } else {
+        Modifier.scale(bounceScale)
+    }
+
     Surface(
         color = bg,
         shape = RoundedCornerShape(999.dp),
-        modifier = Modifier.scale(bounceScale),
+        modifier = pillModifier,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1699,12 +1804,24 @@ private fun SpotifyConnectCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Default.GraphicEq,
-                    contentDescription = stringResource(R.string.cd_spotify_stats),
-                    tint = SpotifyEmerald,
-                    modifier = Modifier.size(24.dp),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(EmeraldContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isConnected) {
+                        AnimatedEqualizerBars(isActive = true)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = stringResource(R.string.cd_spotify_stats),
+                            tint = SpotifyEmerald,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (isConnected) {
@@ -1804,6 +1921,7 @@ fun ListeningLeaderboardCard(
     maxMinutes: Long = 1L,
     isSelf: Boolean,
     isAdminEntry: Boolean = false,
+    onOpenInSpotify: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val hasSynced = stat.syncedAt != null || stat.minutesListened > 0L || stat.tracksCounted > 0L
@@ -1887,15 +2005,36 @@ fun ListeningLeaderboardCard(
                                 )
                             }
                         }
+                        if (hasSynced) {
+                            AnimatedEqualizerBars(
+                                isActive = true,
+                                modifier = Modifier.padding(start = 2.dp),
+                            )
+                        }
                     }
                     if (stat.topArtist.isNotBlank()) {
-                        Text(
-                            text = "Top artist: ${stat.topArtist}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onOpenInSpotify(stat.topArtist) }
+                                .padding(vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "Top artist: ${stat.topArtist}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = "Open ${stat.topArtist} in Spotify",
+                                tint = SpotifyEmerald.copy(alpha = 0.8f),
+                                modifier = Modifier.size(12.dp),
+                            )
+                        }
                     } else if (!hasSynced) {
                         Text(
                             text = if (isSelf) "Tap Connect / Sync Spotify above" else "Waiting for Spotify sync",
@@ -1904,13 +2043,33 @@ fun ListeningLeaderboardCard(
                         )
                     }
                     if (stat.topTrack.isNotBlank()) {
-                        Text(
-                            text = "On repeat: ${stat.topTrack}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable {
+                                    val query = listOf(stat.topTrack, stat.topArtist)
+                                        .filter { it.isNotBlank() }
+                                        .joinToString(" ")
+                                    onOpenInSpotify(query)
+                                }
+                                .padding(vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "On repeat: ${stat.topTrack}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = EmeraldSoftText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = "Open ${stat.topTrack} in Spotify",
+                                tint = SpotifyEmerald.copy(alpha = 0.8f),
+                                modifier = Modifier.size(11.dp),
+                            )
+                        }
                     }
                 }
 

@@ -70,6 +70,7 @@ service cloud.firestore {
         (!('bankAccountNumber' in data) || (data.bankAccountNumber is string && data.bankAccountNumber.size() <= 60)) &&
         (!('bankAccountHolder' in data) || (data.bankAccountHolder is string && data.bankAccountHolder.size() <= 80)) &&
         (!('bankBranch' in data) || (data.bankBranch is string && data.bankBranch.size() <= 80)) &&
+        (!('pinnedAnnouncement' in data) || (data.pinnedAnnouncement is string && data.pinnedAnnouncement.size() <= 280)) &&
         data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -222,14 +223,14 @@ service cloud.firestore {
       allow create: if isAdmin() &&
         configId == 'settings' &&
         incoming().keys().hasAll(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'updatedAt']) &&
-        incoming().keys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'bankName', 'bankAccountNumber', 'bankAccountHolder', 'bankBranch', 'updatedAt']) &&
+        incoming().keys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'bankName', 'bankAccountNumber', 'bankAccountHolder', 'bankBranch', 'pinnedAnnouncement', 'updatedAt']) &&
         isValidPlanConfig(incoming());
 
       allow update: if isAdmin() &&
         configId == 'settings' &&
-        incoming().keys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'bankName', 'bankAccountNumber', 'bankAccountHolder', 'bankBranch', 'updatedAt']) &&
+        incoming().keys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'bankName', 'bankAccountNumber', 'bankAccountHolder', 'bankBranch', 'pinnedAnnouncement', 'updatedAt']) &&
         isValidPlanConfig(incoming()) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'bankName', 'bankAccountNumber', 'bankAccountHolder', 'bankBranch', 'updatedAt']);
+        incoming().diff(existing()).affectedKeys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'bankName', 'bankAccountNumber', 'bankAccountHolder', 'bankBranch', 'pinnedAnnouncement', 'updatedAt']);
 
       allow delete: if false;
     }

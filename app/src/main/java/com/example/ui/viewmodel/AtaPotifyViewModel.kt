@@ -17,8 +17,11 @@ import com.example.data.model.PlanConfig
 import com.example.data.model.ReceiptSlip
 import com.example.data.model.UserProfile
 import com.example.data.model.WhitelistMember
+import com.example.data.model.buildVerifiedPaymentReceiptText
 import com.example.data.model.buildWhatsAppMonthlySummaryText
 import com.example.data.model.calculateAllTimeWrappedSummary
+import com.example.data.model.calculateLongestStreakStanding
+import com.example.data.model.calculatePaymentStreaks
 import com.example.data.repository.AccessResolution
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.PaymentRepository
@@ -188,6 +191,9 @@ class AtaPotifyViewModel(
     private val _spotifyEmailPromptDismissed = MutableStateFlow(false)
     private val _allTimeWrapped = MutableStateFlow<AllTimeWrappedSummary?>(null)
     val allTimeWrapped: StateFlow<AllTimeWrappedSummary?> = _allTimeWrapped.asStateFlow()
+
+    private val _paymentStreaks = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val paymentStreaks: StateFlow<Map<String, Int>> = _paymentStreaks.asStateFlow()
 
     private var hasAutoPromptedOverdueThisSession = false
     private var hasCheckedUpdateThisSession = false
@@ -401,7 +407,13 @@ class AtaPotifyViewModel(
             }
         }
         viewModelScope.launch {
-            combine(paymentMonths, currentMonthStats, historyMonthStats) { months, _, _ -> months }
+            combine(
+                paymentMonths,
+                currentMonthMembers,
+                historyMonthMembers,
+                currentMonthStats,
+                historyMonthStats,
+            ) { months, _, _, _, _ -> months }
                 .collect { months ->
                     refreshAllTimeWrapped(months)
                 }
@@ -435,6 +447,7 @@ class AtaPotifyViewModel(
     private suspend fun refreshAllTimeWrapped(months: List<PaymentMonth>) {
         if (months.isEmpty()) {
             _allTimeWrapped.value = null
+            _paymentStreaks.value = emptyMap()
             return
         }
         val statsByMonth = paymentRepository.fetchAllMonthsStats(
@@ -442,10 +455,28 @@ class AtaPotifyViewModel(
             userEmailLower = session.email,
             isAdmin = session.isAdmin,
         )
+        val membersByMonth = paymentRepository.fetchAllMonthsMembers(
+            months = months,
+            userEmailLower = session.email,
+            isAdmin = session.isAdmin,
+        ).toMutableMap()
+        currentMonth.value?.monthId?.let { activeId ->
+            if (currentMonthMembers.value.isNotEmpty()) {
+                membersByMonth[activeId] = currentMonthMembers.value
+            }
+        }
+        selectedHistoryMonth.value?.monthId?.let { histId ->
+            if (historyMonthMembers.value.isNotEmpty()) {
+                membersByMonth[histId] = historyMonthMembers.value
+            }
+        }
+        _paymentStreaks.value = calculatePaymentStreaks(months, membersByMonth)
+        val longestStreak = calculateLongestStreakStanding(months, membersByMonth)
         val amountByMonth = months.associate { it.monthId to it.amountLkr }
         _allTimeWrapped.value = calculateAllTimeWrappedSummary(
             allStatsByMonth = statsByMonth,
             monthAmountByMonth = amountByMonth,
+            longestStreak = longestStreak,
         )
     }
 
@@ -998,6 +1029,73 @@ class AtaPotifyViewModel(
                 onSuccess = { _snackbarEvents.tryEmit("Bank transfer details saved") },
                 onFailure = { e -> _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to save bank details") },
             )
+        }
+    }
+
+    fun updatePinnedAnnouncement(announcement: String) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val emails = whitelist.value.filter { it.active }.map { AtaPotifyConstants.normalizeEmail(it.email) }
+            val res = paymentRepository.updatePinnedAnnouncement(
+                announcement = announcement,
+                existingAllowedEmails = emails,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    val msg = if (announcement.isBlank()) "Cleared pinned announcement" else "Pinned announcement to Board"
+                    _snackbarEvents.tryEmit(msg)
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to update announcement")
+                },
+            )
+        }
+    }
+
+    fun shareVerifiedReceiptToWhatsApp(
+        context: Context,
+        month: PaymentMonth,
+        member: MemberPaymentStatus,
+    ) {
+        val streak = _paymentStreaks.value[member.memberKey] ?: 0
+        val text = buildVerifiedPaymentReceiptText(
+            month = month,
+            member = member,
+            streakCount = streak,
+            planName = planConfig.value.planName,
+        )
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "AtaPotify Receipt — ${month.displayLabel}")
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        val chooser = Intent.createChooser(sendIntent, "Share Verified Receipt").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            context.startActivity(chooser)
+        }.onFailure {
+            _snackbarEvents.tryEmit("Unable to open share sheet")
+        }
+    }
+
+    fun openInSpotifySearch(context: Context, query: String) {
+        val cleanQuery = query.trim()
+        if (cleanQuery.isBlank()) return
+        val encoded = URLEncoder.encode(cleanQuery, "UTF-8")
+        val spotifyUriIntent = Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:$encoded")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val webFallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/$encoded")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            context.startActivity(spotifyUriIntent)
+        }.recoverCatching {
+            context.startActivity(webFallbackIntent)
+        }.onFailure {
+            _snackbarEvents.tryEmit("Unable to open Spotify for \"$cleanQuery\"")
         }
     }
 

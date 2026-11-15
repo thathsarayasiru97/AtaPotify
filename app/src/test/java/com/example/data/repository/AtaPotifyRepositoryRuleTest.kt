@@ -61,6 +61,13 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
         val member = whitelist.first { it.memberKey == friendKey }
 
+        step("admin updatePinnedAnnouncement") {
+            paymentRepo.updatePinnedAnnouncement(
+                announcement = "New billing cycle is open! Please transfer before the 5th.",
+                existingAllowedEmails = listOf(friendEmail, AtaPotifyConstants.ADMIN_EMAIL),
+            ).getOrThrow()
+        }
+
         step("admin startNewMonth") {
             paymentRepo.startNewMonth(
                 monthId = monthId,

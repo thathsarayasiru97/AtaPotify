@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.spotsplit.kvwmpx"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.3.5"
+    versionCode = 6
+    versionName = "1.3.6"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
