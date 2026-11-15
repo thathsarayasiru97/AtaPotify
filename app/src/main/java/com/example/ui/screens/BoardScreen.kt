@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
@@ -170,6 +171,8 @@ fun BoardScreen(
     onViewSlip: (MemberPaymentStatus) -> Unit,
     onOpenVerifiedReceipt: (MemberPaymentStatus) -> Unit = {},
     onConfirmPaid: (MemberPaymentStatus) -> Unit,
+    onMarkCashPaid: (MemberPaymentStatus) -> Unit = {},
+    onPartialPaymentClick: (MemberPaymentStatus) -> Unit = {},
     onAdvancePayClick: (MemberPaymentStatus) -> Unit = {},
     onRewindPaid: (MemberPaymentStatus) -> Unit,
     onEditPayment: (MemberPaymentStatus) -> Unit,
@@ -463,6 +466,8 @@ fun BoardScreen(
                         onViewSlipClick = { onViewSlip(member) },
                         onOpenVerifiedReceiptClick = { onOpenVerifiedReceipt(member) },
                         onMarkPaidClick = { onConfirmPaid(member) },
+                        onMarkCashPaidClick = { onMarkCashPaid(member) },
+                        onPartialPaymentClick = { onPartialPaymentClick(member) },
                         onAdvancePayClick = { onAdvancePayClick(member) },
                         onRewindPaidClick = { onRewindPaid(member) },
                         onEditPaymentClick = { onEditPayment(member) },
@@ -1191,15 +1196,25 @@ private fun BillingSummaryMemberRow(
                 )
                 Text(
                     text = buildString {
-                        append("LKR ${formatLkr(member.amountLkr)}")
-                        when {
-                            isVerifying -> append(" • Verifying slip")
-                            isPaid -> append(" • Settled")
-                            else -> append(" • Unpaid")
+                        if (member.hasPartialPayment) {
+                            append("LKR ${formatLkr(member.effectivePaidLkr)} / ${formatLkr(member.amountLkr)}")
+                            append(" • LKR ${formatLkr(member.remainingLkr)} left")
+                        } else {
+                            append("LKR ${formatLkr(member.amountLkr)}")
+                            when {
+                                isVerifying -> append(" • Verifying slip")
+                                isPaid && member.isCashPayment -> append(" • Settled (Cash)")
+                                isPaid -> append(" • Settled")
+                                else -> append(" • Unpaid")
+                            }
                         }
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (isVerifying) AmberWarning else TextSecondary,
+                    color = when {
+                        isVerifying -> AmberWarning
+                        member.hasPartialPayment -> AmberWarning
+                        else -> TextSecondary
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1405,6 +1420,8 @@ fun MemberPaymentCard(
     onViewSlipClick: () -> Unit,
     onOpenVerifiedReceiptClick: () -> Unit = {},
     onMarkPaidClick: () -> Unit,
+    onMarkCashPaidClick: () -> Unit = {},
+    onPartialPaymentClick: () -> Unit = {},
     onAdvancePayClick: () -> Unit = {},
     onRewindPaidClick: () -> Unit = {},
     onEditPaymentClick: () -> Unit = {},
@@ -1508,15 +1525,26 @@ fun MemberPaymentCard(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AmberWarning,
                             )
-                        } else if (member.status == AtaPotifyConstants.STATUS_PAID && member.confirmedAt != null) {
-                            val dateStr = remember(member.confirmedAt) {
-                                SimpleDateFormat("MMM d", Locale.US).format(member.confirmedAt.toDate())
+                        } else if (member.status == AtaPotifyConstants.STATUS_PAID) {
+                            val dateStr = member.confirmedAt?.let { ts ->
+                                remember(ts) {
+                                    SimpleDateFormat("MMM d", Locale.US).format(ts.toDate())
+                                }
                             }
-                            Text(
-                                text = "• Confirmed $dateStr",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = EmeraldSoftText,
-                            )
+                            val paidMeta = buildString {
+                                if (dateStr != null) append("• Confirmed $dateStr")
+                                if (member.isCashPayment) {
+                                    if (isNotEmpty()) append(" ")
+                                    append("• Cash in Hand")
+                                }
+                            }
+                            if (paidMeta.isNotEmpty()) {
+                                Text(
+                                    text = paidMeta,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = EmeraldSoftText,
+                                )
+                            }
                         }
                     }
 
@@ -1567,6 +1595,38 @@ fun MemberPaymentCard(
                             onDismissRequest = { showAdminMenu = false },
                             containerColor = SurfaceElevated,
                         ) {
+                            if (member.status != AtaPotifyConstants.STATUS_PAID) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.btn_cash_in_hand), color = SpotifyEmerald) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Payments,
+                                            contentDescription = null,
+                                            tint = SpotifyEmerald,
+                                        )
+                                    },
+                                    onClick = {
+                                        showAdminMenu = false
+                                        onMarkCashPaidClick()
+                                    },
+                                    modifier = Modifier.testTag("cash_in_hand_${member.memberKey}"),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.btn_partial_payment), color = AmberWarning) },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.PieChart,
+                                            contentDescription = null,
+                                            tint = AmberWarning,
+                                        )
+                                    },
+                                    onClick = {
+                                        showAdminMenu = false
+                                        onPartialPaymentClick()
+                                    },
+                                    modifier = Modifier.testTag("partial_payment_${member.memberKey}"),
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Advance Pay (Multi-Month)") },
                                 leadingIcon = {
@@ -1631,6 +1691,47 @@ fun MemberPaymentCard(
                             )
                         }
                     }
+                }
+            }
+
+            if (member.hasPartialPayment) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = buildString {
+                                append("Partial: LKR ${member.effectivePaidLkr} / ${member.amountLkr}")
+                                if (member.isCashPayment) append(" • Cash")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AmberWarning,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "LKR ${member.remainingLkr} left",
+                            style = MonoNumericSmall.copy(fontSize = 11.sp),
+                            color = TextSecondary,
+                        )
+                    }
+                    val partialProgress = (
+                        member.effectivePaidLkr.toFloat() / member.amountLkr.coerceAtLeast(1L).toFloat()
+                    ).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { partialProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(CircleShape)
+                            .testTag("partial_progress_${member.memberKey}"),
+                        color = AmberWarning,
+                        trackColor = SurfaceHighest,
+                    )
                 }
             }
 

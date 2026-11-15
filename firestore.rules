@@ -129,6 +129,8 @@ service cloud.firestore {
         (!('familyGroup' in data) || isValidId(data.familyGroup)) &&
         data.status in ['pending', 'verifying', 'paid'] &&
         data.amountLkr is int && data.amountLkr >= 1 && data.amountLkr <= 100000 &&
+        (!('paidAmountLkr' in data) || (data.paidAmountLkr is int && data.paidAmountLkr >= 0 && data.paidAmountLkr <= data.amountLkr)) &&
+        (!('paymentMethod' in data) || data.paymentMethod in ['', 'bank_slip', 'cash', 'direct']) &&
         data.hasReceipt is bool &&
         isValidAllowedEmails(data.allowedEmails) &&
         data.reminderCount is int && data.reminderCount >= 0 && data.reminderCount <= 1000 &&
@@ -354,7 +356,7 @@ service cloud.firestore {
           isValidId(memberKey) &&
           incoming().memberKey == memberKey &&
           incoming().keys().hasAll(['memberKey', 'memberEmail', 'displayName', 'status', 'amountLkr', 'hasReceipt', 'allowedEmails', 'reminderCount', 'createdAt', 'updatedAt']) &&
-          incoming().keys().hasOnly(['memberKey', 'memberEmail', 'displayName', 'familyGroup', 'status', 'amountLkr', 'hasReceipt', 'allowedEmails', 'reminderCount', 'createdAt', 'submittedAt', 'confirmedAt', 'lastRemindedAt', 'updatedAt']) &&
+          incoming().keys().hasOnly(['memberKey', 'memberEmail', 'displayName', 'familyGroup', 'status', 'amountLkr', 'paidAmountLkr', 'paymentMethod', 'hasReceipt', 'allowedEmails', 'reminderCount', 'createdAt', 'submittedAt', 'confirmedAt', 'lastRemindedAt', 'updatedAt']) &&
           isValidMemberPayment(incoming()) &&
           existsAfter(/databases/$(database)/documents/payments/$(monthId));
 
@@ -368,7 +370,7 @@ service cloud.firestore {
           (
             (
               isAdmin() &&
-              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'familyGroup', 'status', 'amountLkr', 'hasReceipt', 'allowedEmails', 'reminderCount', 'submittedAt', 'confirmedAt', 'lastRemindedAt', 'updatedAt'])
+              incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'familyGroup', 'status', 'amountLkr', 'paidAmountLkr', 'paymentMethod', 'hasReceipt', 'allowedEmails', 'reminderCount', 'submittedAt', 'confirmedAt', 'lastRemindedAt', 'updatedAt'])
             ) ||
             (
               existing().memberEmail == callerEmail() &&

@@ -545,14 +545,89 @@ class PaymentRepository(
         val ref = db.collection("payments").document(monthId)
             .collection("members").document(memberKey)
         return try {
+            val snap = ref.get().await()
+            val totalLkr = (snap.getLong("amountLkr") ?: 0L).coerceAtLeast(0L)
+            val method = if (snap.getBoolean("hasReceipt") == true) {
+                AtaPotifyConstants.PAYMENT_METHOD_BANK_SLIP
+            } else {
+                AtaPotifyConstants.PAYMENT_METHOD_DIRECT
+            }
+            val updates = mutableMapOf<String, Any>(
+                "status" to AtaPotifyConstants.STATUS_PAID,
+                "paymentMethod" to method,
+                "confirmedAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+            if (totalLkr > 0L) {
+                updates["paidAmountLkr"] = totalLkr
+            }
+            ref.update(updates).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun markPaidInCash(
+        monthId: String,
+        member: MemberPaymentStatus,
+    ): Result<Unit> {
+        requireUserId()
+        val ref = db.collection("payments").document(monthId)
+            .collection("members").document(member.memberKey)
+        val totalLkr = member.amountLkr.coerceAtLeast(1L)
+        return try {
             ref.update(
                 mapOf(
                     "status" to AtaPotifyConstants.STATUS_PAID,
+                    "paidAmountLkr" to totalLkr,
+                    "paymentMethod" to AtaPotifyConstants.PAYMENT_METHOD_CASH,
                     "confirmedAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
             ).await()
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun recordPartialPayment(
+        monthId: String,
+        member: MemberPaymentStatus,
+        additionalAmountLkr: Long,
+        isCash: Boolean,
+    ): Result<Boolean> {
+        requireUserId()
+        require(additionalAmountLkr > 0L) { "Partial payment amount must be positive" }
+        val total = member.amountLkr.coerceAtLeast(1L)
+        val newPaid = (member.effectivePaidLkr + additionalAmountLkr).coerceIn(1L, total)
+        val isNowSettled = newPaid >= total
+        val method = if (isCash) {
+            AtaPotifyConstants.PAYMENT_METHOD_CASH
+        } else {
+            AtaPotifyConstants.PAYMENT_METHOD_BANK_SLIP
+        }
+        val ref = db.collection("payments").document(monthId)
+            .collection("members").document(member.memberKey)
+        val updates = mutableMapOf<String, Any>(
+            "paidAmountLkr" to newPaid,
+            "paymentMethod" to method,
+            "updatedAt" to FieldValue.serverTimestamp(),
+        )
+        if (isNowSettled) {
+            updates["status"] = AtaPotifyConstants.STATUS_PAID
+            updates["confirmedAt"] = FieldValue.serverTimestamp()
+        }
+        return try {
+            ref.update(updates).await()
+            Result.success(isNowSettled)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -570,6 +645,8 @@ class PaymentRepository(
                 mapOf(
                     "status" to AtaPotifyConstants.STATUS_PENDING,
                     "hasReceipt" to false,
+                    "paidAmountLkr" to 0L,
+                    "paymentMethod" to FieldValue.delete(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
             ).await()
@@ -598,6 +675,8 @@ class PaymentRepository(
             ref.update(
                 mapOf(
                     "status" to safeStatus,
+                    "paidAmountLkr" to 0L,
+                    "paymentMethod" to FieldValue.delete(),
                     "confirmedAt" to FieldValue.delete(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -620,6 +699,8 @@ class PaymentRepository(
         clearReceipt: Boolean,
         resetReminders: Boolean,
         familyGroup: String? = null,
+        newPaidAmountLkr: Long = member.paidAmountLkr,
+        newPaymentMethod: String = member.paymentMethod,
     ): Result<Unit> {
         requireUserId()
         val cleanName = newDisplayName.trim().take(60)
@@ -633,6 +714,12 @@ class PaymentRepository(
             )
         ) { "Invalid payment status" }
         val normalizedGroup = familyGroup?.let { AtaPotifyConstants.normalizeFamilyGroup(it) }
+        val safeMethod = when (newPaymentMethod) {
+            AtaPotifyConstants.PAYMENT_METHOD_CASH,
+            AtaPotifyConstants.PAYMENT_METHOD_BANK_SLIP,
+            AtaPotifyConstants.PAYMENT_METHOD_DIRECT -> newPaymentMethod
+            else -> ""
+        }
 
         val memberRef = db.collection("payments").document(monthId)
             .collection("members").document(member.memberKey)
@@ -656,11 +743,29 @@ class PaymentRepository(
             updates["lastRemindedAt"] = FieldValue.delete()
         }
         if (newStatus == AtaPotifyConstants.STATUS_PAID) {
+            updates["paidAmountLkr"] = newAmountLkr
+            updates["paymentMethod"] = safeMethod.ifBlank {
+                if (!clearReceipt && member.hasReceipt) {
+                    AtaPotifyConstants.PAYMENT_METHOD_BANK_SLIP
+                } else {
+                    AtaPotifyConstants.PAYMENT_METHOD_DIRECT
+                }
+            }
             if (member.confirmedAt == null) {
                 updates["confirmedAt"] = FieldValue.serverTimestamp()
             }
-        } else if (member.confirmedAt != null || member.status == AtaPotifyConstants.STATUS_PAID) {
-            updates["confirmedAt"] = FieldValue.delete()
+        } else {
+            val maxPartial = (newAmountLkr - 1L).coerceAtLeast(0L)
+            val clampedPartial = newPaidAmountLkr.coerceIn(0L, maxPartial)
+            updates["paidAmountLkr"] = clampedPartial
+            if (clampedPartial > 0L && safeMethod.isNotBlank()) {
+                updates["paymentMethod"] = safeMethod
+            } else if (clampedPartial == 0L) {
+                updates["paymentMethod"] = FieldValue.delete()
+            }
+            if (member.confirmedAt != null || member.status == AtaPotifyConstants.STATUS_PAID) {
+                updates["confirmedAt"] = FieldValue.delete()
+            }
         }
 
         val batch = db.batch()
@@ -1140,6 +1245,8 @@ class PaymentRepository(
                             memberRef,
                             mapOf(
                                 "status" to AtaPotifyConstants.STATUS_PAID,
+                                "paidAmountLkr" to member.amountLkr,
+                                "paymentMethod" to AtaPotifyConstants.PAYMENT_METHOD_DIRECT,
                                 "confirmedAt" to FieldValue.serverTimestamp(),
                                 "updatedAt" to FieldValue.serverTimestamp(),
                             )
@@ -1153,6 +1260,8 @@ class PaymentRepository(
                                 "displayName" to member.displayName.take(60),
                                 "status" to AtaPotifyConstants.STATUS_PAID,
                                 "amountLkr" to member.amountLkr,
+                                "paidAmountLkr" to member.amountLkr,
+                                "paymentMethod" to AtaPotifyConstants.PAYMENT_METHOD_DIRECT,
                                 "hasReceipt" to false,
                                 "allowedEmails" to baseAllowedEmails,
                                 "reminderCount" to 0L,
@@ -1196,6 +1305,8 @@ class PaymentRepository(
                             "updatedAt" to FieldValue.serverTimestamp(),
                         )
                         if (isTarget) {
+                            payload["paidAmountLkr"] = member.amountLkr
+                            payload["paymentMethod"] = AtaPotifyConstants.PAYMENT_METHOD_DIRECT
                             payload["confirmedAt"] = FieldValue.serverTimestamp()
                         }
                         batch.set(wlRef, payload)
@@ -1209,6 +1320,8 @@ class PaymentRepository(
                                 "displayName" to member.displayName.take(60),
                                 "status" to AtaPotifyConstants.STATUS_PAID,
                                 "amountLkr" to member.amountLkr,
+                                "paidAmountLkr" to member.amountLkr,
+                                "paymentMethod" to AtaPotifyConstants.PAYMENT_METHOD_DIRECT,
                                 "hasReceipt" to false,
                                 "allowedEmails" to baseAllowedEmails,
                                 "reminderCount" to 0L,

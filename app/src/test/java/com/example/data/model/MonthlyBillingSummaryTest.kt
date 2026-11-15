@@ -303,6 +303,66 @@ class MonthlyBillingSummaryTest {
         org.junit.Assert.assertTrue(summaryText.contains("November 2026 (Uni Squad)"))
         org.junit.Assert.assertTrue(summaryText.contains("Kavindu"))
     }
+
+    @Test
+    fun partialAndCashPaymentsUpdateBillingSummaryReceiptsAndWhatsAppText() {
+        val month = PaymentMonth(monthId = "2026-11", displayLabel = "November 2026", amountLkr = 450L)
+        val members = listOf(
+            MemberPaymentStatus(
+                memberKey = "alice",
+                displayName = "Alice",
+                status = AtaPotifyConstants.STATUS_PAID,
+                amountLkr = 450L,
+                paidAmountLkr = 450L,
+                paymentMethod = AtaPotifyConstants.PAYMENT_METHOD_CASH,
+            ),
+            MemberPaymentStatus(
+                memberKey = "bob",
+                displayName = "Bob",
+                status = AtaPotifyConstants.STATUS_PENDING,
+                amountLkr = 450L,
+                paidAmountLkr = 200L,
+                paymentMethod = AtaPotifyConstants.PAYMENT_METHOD_CASH,
+            ),
+            MemberPaymentStatus(
+                memberKey = "charlie",
+                displayName = "Charlie",
+                status = AtaPotifyConstants.STATUS_VERIFYING,
+                amountLkr = 450L,
+                paidAmountLkr = 150L,
+                paymentMethod = AtaPotifyConstants.PAYMENT_METHOD_BANK_SLIP,
+            ),
+        )
+
+        val bob = members[1]
+        assertEquals(200L, bob.effectivePaidLkr)
+        assertEquals(250L, bob.remainingLkr)
+        org.junit.Assert.assertTrue(bob.hasPartialPayment)
+        org.junit.Assert.assertTrue(bob.isCashPayment)
+
+        val summary = calculateMonthlyBillingSummary(members)
+        assertEquals(1350L, summary.expectedTotalLkr)
+        assertEquals(800L, summary.collectedLkr) // 450 + 200 + 150
+        assertEquals(250L, summary.pendingOnlyLkr)
+        assertEquals(300L, summary.verifyingLkr)
+        assertEquals(550L, summary.totalPendingLkr)
+        assertEquals(-550L, summary.netBalanceLkr)
+        assertEquals(1, summary.paidCount)
+        assertEquals(1, summary.verifyingCount)
+        assertEquals(1, summary.pendingCount)
+
+        val cashReceipt = buildVerifiedPaymentReceiptText(month = month, member = members[0], streakCount = 1)
+        org.junit.Assert.assertTrue(cashReceipt.contains("Cash in Hand (Verified by Admin)"))
+
+        val whatsappSummary = buildWhatsAppMonthlySummaryText(
+            month = month,
+            members = members,
+            stats = emptyList(),
+            planConfig = PlanConfig(),
+        )
+        org.junit.Assert.assertTrue(whatsappSummary.contains("[PAID • Cash]"))
+        org.junit.Assert.assertTrue(whatsappSummary.contains("[PARTIAL] (LKR 200/450 paid • LKR 250 left)"))
+    }
 }
 
 

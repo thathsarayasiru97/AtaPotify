@@ -662,5 +662,61 @@ test("Family Groups CRUD: Admin can create/update/delete groups, whitelisted mem
   await assertSucceeds(adminDb.collection("family_groups").doc("grp_colombo").delete());
 });
 
+test("Partial payments & Cash in Hand: admin updates allowed, invalid amounts/methods and member tampering rejected", async () => {
+  await seedMonthAndMembers();
+  const adminDb = adminContext().firestore();
+  const aliceDb = memberContext(ALICE_UID, ALICE_EMAIL).firestore();
+  const aliceRef = (db) =>
+    db.collection("payments").doc(MONTH_ID).collection("members").doc(ALICE_KEY);
+
+  // Admin records a partial cash payment
+  await assertSucceeds(
+    aliceRef(adminDb).update({
+      paidAmountLkr: 200,
+      paymentMethod: "cash",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Partial amount exceeding amountLkr is rejected
+  await assertFails(
+    aliceRef(adminDb).update({
+      paidAmountLkr: 500,
+      paymentMethod: "cash",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Invalid paymentMethod value is rejected
+  await assertFails(
+    aliceRef(adminDb).update({
+      paidAmountLkr: 200,
+      paymentMethod: "crypto",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Non-admin member cannot tamper with paidAmountLkr or paymentMethod
+  await assertFails(
+    aliceRef(aliceDb).update({
+      paidAmountLkr: 450,
+      paymentMethod: "cash",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Admin settles in cash
+  const now = new Date();
+  await assertSucceeds(
+    aliceRef(adminDb).update({
+      status: "paid",
+      paidAmountLkr: 450,
+      paymentMethod: "cash",
+      confirmedAt: now,
+      updatedAt: now,
+    })
+  );
+});
+
 
 

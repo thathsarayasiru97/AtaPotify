@@ -25,6 +25,10 @@ object AtaPotifyConstants {
     const val STATUS_VERIFYING = "verifying"
     const val STATUS_PAID = "paid"
 
+    const val PAYMENT_METHOD_BANK_SLIP = "bank_slip"
+    const val PAYMENT_METHOD_CASH = "cash"
+    const val PAYMENT_METHOD_DIRECT = "direct"
+
     const val PLAN_CONFIG_DOC_ID = "settings"
     const val SLIP_DOC_ID = "slip"
 
@@ -275,6 +279,8 @@ data class MemberPaymentStatus(
     val displayName: String = "",
     val status: String = AtaPotifyConstants.STATUS_PENDING,
     val amountLkr: Long = AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
+    val paidAmountLkr: Long = 0L,
+    val paymentMethod: String = "",
     val hasReceipt: Boolean = false,
     val allowedEmails: List<String> = emptyList(),
     val reminderCount: Long = 0L,
@@ -287,6 +293,21 @@ data class MemberPaymentStatus(
 ) {
     val normalizedGroup: String
         get() = AtaPotifyConstants.normalizeFamilyGroup(familyGroup)
+
+    val effectivePaidLkr: Long
+        get() = when {
+            status == AtaPotifyConstants.STATUS_PAID -> amountLkr.coerceAtLeast(0L)
+            else -> paidAmountLkr.coerceIn(0L, amountLkr.coerceAtLeast(0L))
+        }
+
+    val remainingLkr: Long
+        get() = (amountLkr.coerceAtLeast(0L) - effectivePaidLkr).coerceAtLeast(0L)
+
+    val hasPartialPayment: Boolean
+        get() = status != AtaPotifyConstants.STATUS_PAID && effectivePaidLkr > 0L
+
+    val isCashPayment: Boolean
+        get() = paymentMethod == AtaPotifyConstants.PAYMENT_METHOD_CASH
     fun pendingAgeDays(nowMillis: Long = System.currentTimeMillis()): Long {
         val startMillis = createdAt?.toDate()?.time ?: return 0L
         return ((nowMillis - startMillis).coerceAtLeast(0L)) / (24L * 60L * 60L * 1000L)
@@ -468,18 +489,20 @@ fun calculateMonthlyBillingSummary(members: List<MemberPaymentStatus>): MonthlyB
 
     for (member in members) {
         val amount = member.amountLkr.coerceAtLeast(0L)
+        val paidPart = member.effectivePaidLkr
+        val remaining = (amount - paidPart).coerceAtLeast(0L)
         expectedTotal += amount
+        collected += paidPart
         when (member.status) {
             AtaPotifyConstants.STATUS_PAID -> {
-                collected += amount
                 paidCount++
             }
             AtaPotifyConstants.STATUS_VERIFYING -> {
-                verifying += amount
+                verifying += remaining
                 verifyingCount++
             }
             else -> {
-                pendingOnly += amount
+                pendingOnly += remaining
                 pendingCount++
             }
         }
@@ -677,7 +700,11 @@ fun buildVerifiedPaymentReceiptText(
     val confirmedDateStr = member.confirmedAt?.toDate()?.let {
         SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US).format(it)
     } ?: "Verified by Admin"
-    val methodStr = if (member.hasReceipt) "Bank Transfer Slip (Verified)" else "Direct Admin Confirmation"
+    val methodStr = when {
+        member.isCashPayment -> "Cash in Hand (Verified by Admin)"
+        member.hasReceipt -> "Bank Transfer Slip (Verified)"
+        else -> "Direct Admin Confirmation"
+    }
 
     return buildString {
         appendLine("✅ *ATAPOTIFY VERIFIED RECEIPT*")
@@ -719,16 +746,21 @@ fun buildWhatsAppMonthlySummaryText(
             appendLine("*Payment Status:*")
             members.forEach { m ->
                 val badge = when (m.status) {
-                    AtaPotifyConstants.STATUS_PAID -> "[PAID]"
+                    AtaPotifyConstants.STATUS_PAID -> if (m.isCashPayment) "[PAID • Cash]" else "[PAID]"
                     AtaPotifyConstants.STATUS_VERIFYING -> "[VERIFYING]"
-                    else -> "[PENDING]"
+                    else -> if (m.hasPartialPayment) "[PARTIAL]" else "[PENDING]"
                 }
                 val groupTag = if (groupFilter == AtaPotifyConstants.GROUP_ALL && hasMultipleGroups) {
                     " [${AtaPotifyConstants.familyGroupShortBadge(m.normalizedGroup, familyGroups)}]"
                 } else {
                     ""
                 }
-                appendLine("• ${m.displayName}$groupTag: $badge (LKR ${m.amountLkr})")
+                val amountDetail = if (m.hasPartialPayment) {
+                    "LKR ${m.effectivePaidLkr}/${m.amountLkr} paid • LKR ${m.remainingLkr} left"
+                } else {
+                    "LKR ${m.amountLkr}"
+                }
+                appendLine("• ${m.displayName}$groupTag: $badge ($amountDetail)")
             }
         }
         val activeStats = stats.filter { it.minutesListened > 0L }.sortedByDescending { it.minutesListened }

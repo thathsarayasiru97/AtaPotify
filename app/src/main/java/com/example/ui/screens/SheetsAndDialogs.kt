@@ -32,7 +32,9 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.FilterChip
@@ -902,6 +904,8 @@ fun EditPaymentDialog(
         clearReceipt: Boolean,
         resetReminders: Boolean,
         familyGroup: String,
+        paidAmountLkr: Long,
+        paymentMethod: String,
     ) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -909,6 +913,8 @@ fun EditPaymentDialog(
     var displayName by remember(member) { mutableStateOf(member.displayName) }
     var status by remember(member) { mutableStateOf(member.status) }
     var amountText by remember(member) { mutableStateOf(member.amountLkr.toString()) }
+    var paidAmountText by remember(member) { mutableStateOf(member.effectivePaidLkr.toString()) }
+    var paymentMethod by remember(member) { mutableStateOf(member.paymentMethod) }
     var clearReceipt by remember(member) { mutableStateOf(false) }
     var resetReminders by remember(member) { mutableStateOf(false) }
     var familyGroup by remember(member, initialFamilyGroup) {
@@ -920,13 +926,25 @@ fun EditPaymentDialog(
         AtaPotifyConstants.STATUS_VERIFYING to stringResource(R.string.status_verifying),
         AtaPotifyConstants.STATUS_PAID to stringResource(R.string.status_paid),
     )
+    val methodOptions = listOf(
+        AtaPotifyConstants.PAYMENT_METHOD_CASH to "Cash in Hand",
+        AtaPotifyConstants.PAYMENT_METHOD_BANK_SLIP to "Bank Slip",
+        AtaPotifyConstants.PAYMENT_METHOD_DIRECT to "Direct",
+    )
+
+    val parsedAmount = amountText.toLongOrNull() ?: 0L
+    val parsedPaidSoFar = paidAmountText.toLongOrNull() ?: 0L
+    val showMethodPicker = status == AtaPotifyConstants.STATUS_PAID || parsedPaidSoFar > 0L
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = SurfaceDark,
         title = { Text("Edit Payment Log") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     text = "$monthLabel • ${member.memberEmail}",
                     style = MaterialTheme.typography.bodySmall,
@@ -944,7 +962,7 @@ fun EditPaymentDialog(
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it.filter { c -> c.isDigit() } },
-                    label = { Text("Amount (LKR)") },
+                    label = { Text("Total Share Amount (LKR)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier
@@ -987,6 +1005,53 @@ fun EditPaymentDialog(
                                 selectedLabelColor = SpotifyEmerald,
                             ),
                         )
+                    }
+                }
+                if (status != AtaPotifyConstants.STATUS_PAID) {
+                    val maxPartial = (parsedAmount - 1L).coerceAtLeast(0L)
+                    val previewPaid = parsedPaidSoFar.coerceIn(0L, maxPartial)
+                    val previewRemaining = (parsedAmount - previewPaid).coerceAtLeast(0L)
+                    OutlinedTextField(
+                        value = paidAmountText,
+                        onValueChange = { paidAmountText = it.filter { c -> c.isDigit() } },
+                        label = { Text("Paid So Far (LKR)") },
+                        supportingText = {
+                            Text("0 to $maxPartial LKR for partial payment • Remaining: LKR $previewRemaining")
+                        },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_payment_paid_amount_input"),
+                    )
+                }
+                if (showMethodPicker) {
+                    Text(
+                        text = "Payment Method",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextSecondary,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        methodOptions.forEach { (methodValue, methodLabel) ->
+                            val selected = paymentMethod == methodValue
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    paymentMethod = if (selected) "" else methodValue
+                                },
+                                label = { Text(methodLabel) },
+                                modifier = Modifier.testTag("edit_payment_method_$methodValue"),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    containerColor = SurfaceElevated,
+                                    labelColor = TextSecondary,
+                                    selectedContainerColor = EmeraldContainer,
+                                    selectedLabelColor = SpotifyEmerald,
+                                ),
+                            )
+                        }
                     }
                 }
                 if (member.hasReceipt) {
@@ -1036,9 +1101,31 @@ fun EditPaymentDialog(
             }
         },
         confirmButton = {
-            val amount = amountText.toLongOrNull() ?: 0L
+            val amount = parsedAmount
+            val maxPartial = (amount - 1L).coerceAtLeast(0L)
+            val paidToSave = if (status == AtaPotifyConstants.STATUS_PAID) {
+                amount
+            } else {
+                parsedPaidSoFar.coerceIn(0L, maxPartial)
+            }
+            val methodToSave = if (status != AtaPotifyConstants.STATUS_PAID && paidToSave == 0L) {
+                ""
+            } else {
+                paymentMethod
+            }
             Button(
-                onClick = { onSave(displayName, status, amount, clearReceipt, resetReminders, familyGroup) },
+                onClick = {
+                    onSave(
+                        displayName,
+                        status,
+                        amount,
+                        clearReceipt,
+                        resetReminders,
+                        familyGroup,
+                        paidToSave,
+                        methodToSave,
+                    )
+                },
                 enabled = !isBusy && displayName.isNotBlank() && amount in 1..100_000,
                 modifier = Modifier.testTag("edit_payment_save_button"),
                 colors = ButtonDefaults.buttonColors(
@@ -1051,6 +1138,234 @@ fun EditPaymentDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun PartialPaymentDialog(
+    member: MemberPaymentStatus,
+    monthLabel: String,
+    isBusy: Boolean,
+    onConfirmPartial: (additionalAmountLkr: Long, isCash: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val totalLkr = member.amountLkr.coerceAtLeast(1L)
+    val paidSoFar = member.effectivePaidLkr
+    val remainingLkr = member.remainingLkr.coerceAtLeast(1L)
+
+    var amountText by remember(member) {
+        mutableStateOf((remainingLkr / 2L).coerceAtLeast(1L).toString())
+    }
+    var isCash by remember(member) {
+        mutableStateOf(member.paymentMethod != AtaPotifyConstants.PAYMENT_METHOD_BANK_SLIP)
+    }
+
+    val enteredAmount = amountText.toLongOrNull() ?: 0L
+    val isValidAmount = enteredAmount in 1L..remainingLkr
+    val projectedPaid = (paidSoFar + enteredAmount.coerceAtLeast(0L)).coerceAtMost(totalLkr)
+    val projectedRemaining = (totalLkr - projectedPaid).coerceAtLeast(0L)
+    val willSettle = enteredAmount >= remainingLkr && enteredAmount > 0L
+
+    val quickAmounts = remember(remainingLkr) {
+        buildList {
+            val half = (remainingLkr / 2L).coerceAtLeast(1L)
+            add("50% ($half)" to half)
+            if (remainingLkr >= 100L && 100L != half && 100L < remainingLkr) {
+                add("LKR 100" to 100L)
+            }
+            if (remainingLkr >= 200L && 200L != half && 200L < remainingLkr) {
+                add("LKR 200" to 200L)
+            }
+            add("Full ($remainingLkr)" to remainingLkr)
+        }.distinctBy { it.second }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceDark,
+        modifier = Modifier.testTag("partial_payment_dialog"),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PieChart,
+                    contentDescription = null,
+                    tint = AmberWarning,
+                )
+                Column {
+                    Text(stringResource(R.string.btn_partial_payment))
+                    Text(
+                        text = "${member.displayName} • $monthLabel",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    color = SurfaceElevated,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, BorderSubtle),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column {
+                            Text("Share", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                            Text("LKR $totalLkr", style = MonoNumericSmall, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Paid So Far", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                            Text("LKR $paidSoFar", style = MonoNumericSmall, color = SpotifyEmerald)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("Remaining", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                            Text("LKR $remainingLkr", style = MonoNumericSmall, color = AmberWarning)
+                        }
+                    }
+                }
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    quickAmounts.forEach { (chipLabel, chipAmount) ->
+                        FilterChip(
+                            selected = enteredAmount == chipAmount,
+                            onClick = { amountText = chipAmount.toString() },
+                            label = { Text(chipLabel) },
+                            modifier = Modifier.testTag("partial_quick_amount_$chipAmount"),
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = SurfaceElevated,
+                                labelColor = TextSecondary,
+                                selectedContainerColor = AmberContainer,
+                                selectedLabelColor = AmberWarning,
+                            ),
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it.filter { c -> c.isDigit() } },
+                    label = { Text("Amount Received Now (LKR)") },
+                    supportingText = {
+                        if (enteredAmount > remainingLkr) {
+                            Text("Max LKR $remainingLkr remaining", color = CoralPending)
+                        } else {
+                            Text("Will add to existing LKR $paidSoFar paid")
+                        }
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("partial_payment_amount_input"),
+                )
+
+                Text(
+                    text = "Received Via",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = isCash,
+                        onClick = { isCash = true },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Payments,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                        label = { Text("Cash in Hand") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("partial_payment_method_cash"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = EmeraldContainer,
+                            selectedLabelColor = SpotifyEmerald,
+                        ),
+                    )
+                    FilterChip(
+                        selected = !isCash,
+                        onClick = { isCash = false },
+                        label = { Text("Bank Transfer") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("partial_payment_method_bank"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = EmeraldContainer,
+                            selectedLabelColor = SpotifyEmerald,
+                        ),
+                    )
+                }
+
+                Surface(
+                    color = if (willSettle) EmeraldContainer.copy(alpha = 0.5f) else AmberContainer.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (willSettle) SpotifyEmerald.copy(alpha = 0.45f) else AmberWarning.copy(alpha = 0.45f),
+                    ),
+                ) {
+                    Text(
+                        text = when {
+                            !isValidAmount -> "Enter an amount between 1 and $remainingLkr LKR."
+                            willSettle -> "Settles full LKR $totalLkr balance → Member will be marked Paid."
+                            else -> "New Paid Total: LKR $projectedPaid / $totalLkr • LKR $projectedRemaining left."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (willSettle) SpotifyEmerald else AmberWarning,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirmPartial(enteredAmount, isCash) },
+                enabled = !isBusy && isValidAmount,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("partial_payment_confirm_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (willSettle) SpotifyEmerald else AmberWarning,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                Text(if (willSettle) "Settle & Mark Paid" else "Record LKR $enteredAmount")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.minimumInteractiveComponentSize(),
+            ) {
                 Text("Cancel", color = TextSecondary)
             }
         },
@@ -1734,7 +2049,11 @@ fun VerifiedPaymentReceiptDialog(
                             HorizontalDivider(color = BorderSubtle)
                             ReceiptMetaRow(
                                 label = "Verification",
-                                value = if (member.hasReceipt) "Bank Slip Verified" else "Confirmed by Admin",
+                                value = when {
+                                    member.isCashPayment -> "Cash in Hand (Paid to Admin)"
+                                    member.hasReceipt -> "Bank Slip Verified"
+                                    else -> "Confirmed by Admin"
+                                },
                             )
                             HorizontalDivider(color = BorderSubtle)
                             ReceiptMetaRow(label = "Confirmed On", value = verifiedDateStr)

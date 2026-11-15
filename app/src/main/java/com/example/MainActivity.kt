@@ -119,6 +119,7 @@ import com.example.ui.screens.EditPaymentDialog
 import com.example.ui.screens.FamilyGroupsScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.LoadingGateScreen
+import com.example.ui.screens.PartialPaymentDialog
 import com.example.ui.screens.ProfileEditorSheet
 import com.example.ui.screens.ReceiptSlipDialog
 import com.example.ui.screens.SignInScreen
@@ -385,6 +386,7 @@ private fun MainAppScaffold(
     var showWhitelistDialog by remember { mutableStateOf(false) }
     var editingWhitelistMember by remember { mutableStateOf<WhitelistMember?>(null) }
     var editingPaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
+    var partialPaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
     var advancePaymentContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
     var verifiedReceiptContext by remember { mutableStateOf<Pair<PaymentMonth, MemberPaymentStatus>?>(null) }
     var deletingPaymentContext by remember { mutableStateOf<Triple<PaymentMonth, MemberPaymentStatus, List<MemberPaymentStatus>>?>(null) }
@@ -737,6 +739,16 @@ private fun MainAppScaffold(
                                     viewModel.confirmMemberPayment(month.monthId, member.memberKey)
                                 }
                             },
+                            onMarkCashPaid = { member ->
+                                currentMonth?.let { month ->
+                                    viewModel.markMemberPaidInCash(month.monthId, member)
+                                }
+                            },
+                            onPartialPaymentClick = { member ->
+                                currentMonth?.let { month ->
+                                    partialPaymentContext = month to member
+                                }
+                            },
                             onAdvancePayClick = { member ->
                                 currentMonth?.let { month ->
                                     advancePaymentContext = month to member
@@ -848,6 +860,16 @@ private fun MainAppScaffold(
                             onConfirmPaid = { member ->
                                 selectedHistoryMonth?.let { month ->
                                     viewModel.confirmMemberPayment(month.monthId, member.memberKey)
+                                }
+                            },
+                            onMarkCashPaid = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    viewModel.markMemberPaidInCash(month.monthId, member)
+                                }
+                            },
+                            onPartialPaymentClick = { member ->
+                                selectedHistoryMonth?.let { month ->
+                                    partialPaymentContext = month to member
                                 }
                             },
                             onAdvancePayClick = { member ->
@@ -1158,6 +1180,26 @@ private fun MainAppScaffold(
         }
     }
 
+    partialPaymentContext?.let { (month, member) ->
+        if (session.isAdmin) {
+            PartialPaymentDialog(
+                member = member,
+                monthLabel = month.displayLabel,
+                isBusy = isBusy,
+                onConfirmPartial = { additionalAmountLkr, isCash ->
+                    viewModel.recordMemberPartialPayment(
+                        monthId = month.monthId,
+                        member = member,
+                        additionalAmountLkr = additionalAmountLkr,
+                        isCash = isCash,
+                        onDone = { partialPaymentContext = null },
+                    )
+                },
+                onDismiss = { partialPaymentContext = null },
+            )
+        }
+    }
+
     editingPaymentContext?.let { (month, member) ->
         if (session.isAdmin) {
             val wlGroup = whitelist.firstOrNull { it.memberKey == member.memberKey }?.normalizedGroup
@@ -1167,7 +1209,7 @@ private fun MainAppScaffold(
                 familyGroups = familyGroups,
                 initialFamilyGroup = wlGroup ?: member.normalizedGroup,
                 isBusy = isBusy,
-                onSave = { displayName, status, amountLkr, clearReceipt, resetReminders, familyGroup ->
+                onSave = { displayName, status, amountLkr, clearReceipt, resetReminders, familyGroup, paidAmountLkr, paymentMethod ->
                     viewModel.editMemberPayment(
                         monthId = month.monthId,
                         member = member,
@@ -1177,6 +1219,8 @@ private fun MainAppScaffold(
                         clearReceipt = clearReceipt,
                         resetReminders = resetReminders,
                         familyGroup = familyGroup,
+                        paidAmountLkr = paidAmountLkr,
+                        paymentMethod = paymentMethod,
                         onDone = { editingPaymentContext = null },
                     )
                 },

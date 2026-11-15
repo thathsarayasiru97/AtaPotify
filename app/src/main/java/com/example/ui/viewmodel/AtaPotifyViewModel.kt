@@ -371,7 +371,7 @@ class AtaPotifyViewModel(
         members.filter { it.isOverdueForAutoReminder(now) }.map { member ->
             val phone = AtaPotifyConstants.sanitizeWhatsAppDigits(phoneByKey[member.memberKey].orEmpty())
             val days = member.pendingAgeDays(now).coerceAtLeast(AtaPotifyConstants.OVERDUE_DAYS_THRESHOLD)
-            val msg = buildOverdueWhatsAppMessage(member.displayName, month.displayLabel, member.amountLkr, days)
+            val msg = buildOverdueWhatsAppMessage(member, month.displayLabel, days)
             OverdueReminderCandidate(
                 member = member,
                 phoneDigits = phone,
@@ -720,6 +720,59 @@ class AtaPotifyViewModel(
         }
     }
 
+    fun markMemberPaidInCash(monthId: String, member: MemberPaymentStatus) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.markPaidInCash(monthId, member)
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _receiptDialog.value = null
+                    _snackbarEvents.tryEmit("Marked ${member.displayName} paid via Cash in Hand")
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to record cash payment")
+                },
+            )
+        }
+    }
+
+    fun recordMemberPartialPayment(
+        monthId: String,
+        member: MemberPaymentStatus,
+        additionalAmountLkr: Long,
+        isCash: Boolean,
+        onDone: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.recordPartialPayment(
+                monthId = monthId,
+                member = member,
+                additionalAmountLkr = additionalAmountLkr,
+                isCash = isCash,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = { settled ->
+                    val methodLabel = if (isCash) "Cash in Hand" else "Bank Transfer"
+                    val msg = if (settled) {
+                        "${member.displayName} settled full LKR ${member.amountLkr} ($methodLabel)"
+                    } else {
+                        val newTotal = (member.effectivePaidLkr + additionalAmountLkr).coerceAtMost(member.amountLkr)
+                        val remaining = (member.amountLkr - newTotal).coerceAtLeast(0L)
+                        "Recorded LKR $additionalAmountLkr ($methodLabel) • LKR $remaining left"
+                    }
+                    _snackbarEvents.tryEmit(msg)
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to record partial payment")
+                },
+            )
+        }
+    }
+
     fun confirmAdvancePaymentMonths(
         startMonth: PaymentMonth,
         member: MemberPaymentStatus,
@@ -828,6 +881,8 @@ class AtaPotifyViewModel(
         clearReceipt: Boolean,
         resetReminders: Boolean,
         familyGroup: String? = null,
+        paidAmountLkr: Long = member.paidAmountLkr,
+        paymentMethod: String = member.paymentMethod,
         onDone: () -> Unit,
     ) {
         viewModelScope.launch {
@@ -841,6 +896,8 @@ class AtaPotifyViewModel(
                 clearReceipt = clearReceipt,
                 resetReminders = resetReminders,
                 familyGroup = familyGroup,
+                newPaidAmountLkr = paidAmountLkr,
+                newPaymentMethod = paymentMethod,
             )
             _isBusy.value = false
             res.fold(
@@ -955,9 +1012,8 @@ class AtaPotifyViewModel(
             return
         }
         val text = customMessage ?: buildStandardWhatsAppMessage(
-            member.displayName,
-            month.displayLabel,
-            member.amountLkr,
+            member = member,
+            monthLabel = month.displayLabel,
         )
         val url = "https://wa.me/$cleanPhone?text=${URLEncoder.encode(text, "UTF-8")}"
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
@@ -1483,19 +1539,23 @@ class AtaPotifyViewModel(
     }
 
     private fun buildStandardWhatsAppMessage(
-        name: String,
+        member: MemberPaymentStatus,
         monthLabel: String,
-        amountLkr: Long,
-    ): String =
-        "Hey $name! Friendly reminder for your AtaPotify (Spotify Family) share for $monthLabel: LKR $amountLkr. Please upload your payment slip in the app once sent."
+    ): String = if (member.hasPartialPayment) {
+        "Hey ${member.displayName}! Friendly reminder for your AtaPotify (Spotify Family) share for $monthLabel: LKR ${member.remainingLkr} remaining (already paid LKR ${member.effectivePaidLkr} of LKR ${member.amountLkr}). Please settle when you can!"
+    } else {
+        "Hey ${member.displayName}! Friendly reminder for your AtaPotify (Spotify Family) share for $monthLabel: LKR ${member.amountLkr}. Please upload your payment slip in the app once sent."
+    }
 
     private fun buildOverdueWhatsAppMessage(
-        name: String,
+        member: MemberPaymentStatus,
         monthLabel: String,
-        amountLkr: Long,
         daysPending: Long,
-    ): String =
-        "Hey $name! Your AtaPotify (Spotify Family) payment of LKR $amountLkr for $monthLabel has been pending for $daysPending days. Please settle it and upload your slip in AtaPotify when you get a chance!"
+    ): String = if (member.hasPartialPayment) {
+        "Hey ${member.displayName}! Your AtaPotify (Spotify Family) balance of LKR ${member.remainingLkr} (paid LKR ${member.effectivePaidLkr} of LKR ${member.amountLkr}) for $monthLabel has been pending for $daysPending days. Please settle the balance when you get a chance!"
+    } else {
+        "Hey ${member.displayName}! Your AtaPotify (Spotify Family) payment of LKR ${member.amountLkr} for $monthLabel has been pending for $daysPending days. Please settle it and upload your slip in AtaPotify when you get a chance!"
+    }
 
     private companion object {
         const val TAG = "AtaPotifyVM"

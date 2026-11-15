@@ -36,6 +36,8 @@
     <string name="btn_review_slip">Review Slip</string>
     <string name="btn_remind">Remind</string>
     <string name="btn_mark_paid">Mark Paid</string>
+    <string name="btn_cash_in_hand">Cash in Hand (Mark Paid)</string>
+    <string name="btn_partial_payment">Record Partial Payment</string>
     <string name="btn_confirm_payment">Confirm Payment</string>
     <string name="btn_reject_pending">Return to Pending</string>
     <string name="btn_rewind_paid">Rewind Paid</string>

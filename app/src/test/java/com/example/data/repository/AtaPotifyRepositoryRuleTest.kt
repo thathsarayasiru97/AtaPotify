@@ -517,6 +517,126 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, firestoreException.code)
     }
 
+    @Test
+    fun adminCanRecordPartialPaymentsMarkCashPaidAndRewind() = runBlocking {
+        signInTestUser(AtaPotifyConstants.ADMIN_EMAIL)
+        val authRepo = AuthRepository(firestore, auth)
+        val paymentRepo = PaymentRepository(firestore, auth)
+
+        step("admin resolveAccess") {
+            authRepo.resolveAccessAndSyncProfile(auth.currentUser!!).getOrThrow()
+        }
+
+        val friendEmail = "cash_partial_${UUID.randomUUID().toString().take(6)}@gmail.com"
+        val friendKey = AtaPotifyConstants.memberKeyForEmail(friendEmail)
+        val monthId = uniqueMonthId()
+
+        step("whitelist friend") {
+            paymentRepo.upsertWhitelistMember(
+                email = friendEmail,
+                displayName = "Nimal",
+                phone = "94772223344",
+                active = true,
+                allCurrentWhitelist = emptyList(),
+                activeMonth = null,
+                activeMonthMembers = emptyList(),
+            ).getOrThrow()
+        }
+        val wlMember = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeWhitelist().first { list -> list.any { it.memberKey == friendKey } }
+                .first { it.memberKey == friendKey }
+        }
+
+        step("start month") {
+            paymentRepo.startNewMonth(
+                monthId = monthId,
+                displayLabel = "Partial & Cash Test Month",
+                amountLkr = 450L,
+                activeMembers = listOf(wlMember),
+            ).getOrThrow()
+        }
+
+        val initialMember = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey } }
+                .first { it.memberKey == friendKey }
+        }
+
+        // First partial payment: 200 LKR in cash -> still pending with paidAmountLkr = 200
+        val settledFirst = step("record first partial payment (200 cash)") {
+            paymentRepo.recordPartialPayment(
+                monthId = monthId,
+                member = initialMember,
+                additionalAmountLkr = 200L,
+                isCash = true,
+            ).getOrThrow()
+        }
+        assertEquals(false, settledFirst)
+
+        val afterFirstPartial = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.paidAmountLkr == 200L } }
+                .first { it.memberKey == friendKey }
+        }
+        assertEquals(AtaPotifyConstants.STATUS_PENDING, afterFirstPartial.status)
+        assertEquals(200L, afterFirstPartial.effectivePaidLkr)
+        assertEquals(250L, afterFirstPartial.remainingLkr)
+        assertTrue(afterFirstPartial.hasPartialPayment)
+        assertTrue(afterFirstPartial.isCashPayment)
+
+        // Second partial payment: remaining 250 LKR -> settles to paid
+        val settledSecond = step("record second partial payment (250 cash)") {
+            paymentRepo.recordPartialPayment(
+                monthId = monthId,
+                member = afterFirstPartial,
+                additionalAmountLkr = 250L,
+                isCash = true,
+            ).getOrThrow()
+        }
+        assertEquals(true, settledSecond)
+
+        val afterSettled = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.status == AtaPotifyConstants.STATUS_PAID } }
+                .first { it.memberKey == friendKey }
+        }
+        assertEquals(450L, afterSettled.effectivePaidLkr)
+        assertEquals(0L, afterSettled.remainingLkr)
+        assertTrue(afterSettled.isCashPayment)
+
+        // Rewind clears paidAmountLkr and paymentMethod back to 0 / empty
+        step("rewind paid back to pending") {
+            paymentRepo.rewindPayment(monthId, friendKey, AtaPotifyConstants.STATUS_PENDING).getOrThrow()
+        }
+        val afterRewind = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.status == AtaPotifyConstants.STATUS_PENDING } }
+                .first { it.memberKey == friendKey }
+        }
+        assertEquals(0L, afterRewind.paidAmountLkr)
+        assertEquals("", afterRewind.paymentMethod)
+
+        // Direct Cash in Hand (Mark Paid) sets status = paid, paidAmountLkr = 450, paymentMethod = cash
+        step("markPaidInCash") {
+            paymentRepo.markPaidInCash(monthId, afterRewind).getOrThrow()
+        }
+        val afterCashPaid = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.status == AtaPotifyConstants.STATUS_PAID } }
+                .first { it.memberKey == friendKey }
+        }
+        assertEquals(450L, afterCashPaid.paidAmountLkr)
+        assertTrue(afterCashPaid.isCashPayment)
+
+        step("cleanup partial/cash test month") {
+            paymentRepo.deleteBillingMonth(
+                monthId = monthId,
+                memberKeys = listOf(friendKey),
+                statKeys = emptyList(),
+            ).getOrThrow()
+        }
+    }
+
     private companion object {
         const val TIMEOUT_MS = 8000L
         const val FLOW_TIMEOUT_MS = 4000L

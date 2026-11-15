@@ -79,6 +79,8 @@
         "familyGroup": { "type": "string", "description": "Assigned Spotify Family group ID (e.g. group_1, group_2, or custom group ID)" },
         "status": { "type": "string", "enum": ["pending", "verifying", "paid"], "description": "Payment state" },
         "amountLkr": { "type": "integer", "description": "Amount due in LKR" },
+        "paidAmountLkr": { "type": "integer", "description": "Partial or full LKR amount received so far" },
+        "paymentMethod": { "type": "string", "enum": ["", "bank_slip", "cash", "direct"], "description": "Payment collection method (e.g. cash in hand vs bank slip)" },
         "hasReceipt": { "type": "boolean", "description": "True if a receipt image has been uploaded" },
         "allowedEmails": { "type": "array", "description": "Denormalized authorized emails for list alignment" },
         "reminderCount": { "type": "integer", "description": "Count of WhatsApp reminders dispatched" },
