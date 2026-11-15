@@ -248,17 +248,14 @@ class AtaPotifyViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-    val whitelist: StateFlow<List<WhitelistMember>> = if (session.isAdmin) {
-        paymentRepository.observeWhitelist()
+    val whitelist: StateFlow<List<WhitelistMember>> =
+        paymentRepository.observeWhitelist(userEmailLower = session.email, isAdmin = session.isAdmin)
             .catch { error ->
                 val fsErr = error.unwrapFirestoreException()
                 if (fsErr == null && error is CancellationException) throw error
                 Log.w(TAG, "Error observing whitelist", fsErr ?: error)
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
-    } else {
-        MutableStateFlow(emptyList())
-    }
 
     val pendingAccessRequests: StateFlow<List<AccessRequest>> = if (session.isAdmin) {
         paymentRepository.observePendingAccessRequests()
@@ -1324,6 +1321,11 @@ class AtaPotifyViewModel(
         colorHex: String,
         maxSlots: Long,
         alsoUpdateActiveMonthMembers: Boolean,
+        address: String = "",
+        managerName: String = "",
+        managerEmail: String = "",
+        inviteLink: String = "",
+        notes: String = "",
         onDone: () -> Unit = {},
     ) {
         viewModelScope.launch {
@@ -1339,6 +1341,11 @@ class AtaPotifyViewModel(
                 alsoUpdateActiveMonthMembers = alsoUpdateActiveMonthMembers,
                 activeMonth = currentMonth.value,
                 activeMonthMembers = currentMonthMembers.value,
+                address = address,
+                managerName = managerName,
+                managerEmail = managerEmail,
+                inviteLink = inviteLink,
+                notes = notes,
             )
             _isBusy.value = false
             res.fold(

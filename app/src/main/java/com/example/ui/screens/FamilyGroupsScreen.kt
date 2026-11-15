@@ -32,14 +32,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
@@ -67,7 +75,6 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,15 +84,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.FAMILY_GROUP_COLOR_PRESETS
 import com.example.data.model.FamilyGroup
+import com.example.data.model.MemberPaymentStatus
 import com.example.data.model.PaymentMonth
+import com.example.data.model.PlanConfig
 import com.example.data.model.WhitelistMember
 import com.example.ui.components.pressBounceClickable
 import com.example.ui.theme.AmberContainer
@@ -94,7 +105,7 @@ import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.CoralContainer
 import com.example.ui.theme.CoralPending
 import com.example.ui.theme.EmeraldContainer
-import com.example.ui.theme.MonoNumericLarge
+import com.example.ui.theme.EmeraldSoftText
 import com.example.ui.theme.MonoNumericSmall
 import com.example.ui.theme.ObsidianBg
 import com.example.ui.theme.SpotifyEmerald
@@ -111,11 +122,20 @@ import java.util.TimeZone
 
 @Composable
 fun FamilyGroupsScreen(
+    isAdmin: Boolean,
+    currentMemberKey: String,
+    currentUserEmail: String,
+    currentUserSpotifyEmail: String,
+    assignedGroupId: String,
     familyGroups: List<FamilyGroup>,
     whitelist: List<WhitelistMember>,
     currentMonth: PaymentMonth?,
+    currentMonthMembers: List<MemberPaymentStatus>,
+    planConfig: PlanConfig,
     defaultAmountLkr: Long,
     isBusy: Boolean,
+    onCopyText: (label: String, text: String) -> Unit,
+    onOpenUrl: (url: String) -> Unit,
     onCreateOrUpdateGroup: (
         groupId: String?,
         name: String,
@@ -124,6 +144,11 @@ fun FamilyGroupsScreen(
         colorHex: String,
         maxSlots: Long,
         alsoUpdateActiveMonthMembers: Boolean,
+        address: String,
+        managerName: String,
+        managerEmail: String,
+        inviteLink: String,
+        notes: String,
         onDone: () -> Unit,
     ) -> Unit,
     onDeleteGroup: (group: FamilyGroup, reassignToGroupId: String?, onDone: () -> Unit) -> Unit,
@@ -143,6 +168,22 @@ fun FamilyGroupsScreen(
         onDone: () -> Unit,
     ) -> Unit,
 ) {
+    if (!isAdmin) {
+        MemberFamilyGroupView(
+            assignedGroupId = assignedGroupId,
+            familyGroups = familyGroups,
+            currentMemberKey = currentMemberKey,
+            currentUserEmail = currentUserEmail,
+            currentUserSpotifyEmail = currentUserSpotifyEmail,
+            currentMonth = currentMonth,
+            currentMonthMembers = currentMonthMembers,
+            planConfig = planConfig,
+            onCopyText = onCopyText,
+            onOpenUrl = onOpenUrl,
+        )
+        return
+    }
+
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var editingGroup by remember { mutableStateOf<FamilyGroup?>(null) }
     var deletingGroup by remember { mutableStateOf<FamilyGroup?>(null) }
@@ -273,6 +314,7 @@ fun FamilyGroupsScreen(
                     onDeleteGroup = { deletingGroup = group },
                     onAssignMembers = { assigningToGroup = group },
                     onTransferMember = { member -> transferringMember = member },
+                    onCopyText = onCopyText,
                 )
             }
 
@@ -290,7 +332,7 @@ fun FamilyGroupsScreen(
             defaultColorHex = nextPreset,
             currentMonth = currentMonth,
             isBusy = isBusy,
-            onSave = { name, startDate, amountLkr, colorHex, maxSlots, updateMonth ->
+            onSave = { name, startDate, amountLkr, colorHex, maxSlots, updateMonth, address, managerName, managerEmail, inviteLink, notes ->
                 onCreateOrUpdateGroup(
                     null,
                     name,
@@ -299,6 +341,11 @@ fun FamilyGroupsScreen(
                     colorHex,
                     maxSlots,
                     updateMonth,
+                    address,
+                    managerName,
+                    managerEmail,
+                    inviteLink,
+                    notes,
                 ) {
                     showCreateGroupDialog = false
                 }
@@ -314,7 +361,7 @@ fun FamilyGroupsScreen(
             defaultColorHex = target.colorHex,
             currentMonth = currentMonth,
             isBusy = isBusy,
-            onSave = { name, startDate, amountLkr, colorHex, maxSlots, updateMonth ->
+            onSave = { name, startDate, amountLkr, colorHex, maxSlots, updateMonth, address, managerName, managerEmail, inviteLink, notes ->
                 onCreateOrUpdateGroup(
                     target.effectiveId,
                     name,
@@ -323,6 +370,11 @@ fun FamilyGroupsScreen(
                     colorHex,
                     maxSlots,
                     updateMonth,
+                    address,
+                    managerName,
+                    managerEmail,
+                    inviteLink,
+                    notes,
                 ) {
                     editingGroup = null
                 }
@@ -412,6 +464,7 @@ private fun FamilyGroupManagementCard(
     onDeleteGroup: () -> Unit,
     onAssignMembers: () -> Unit,
     onTransferMember: (WhitelistMember) -> Unit,
+    onCopyText: (label: String, text: String) -> Unit,
 ) {
     val groupColor = parseGroupColorHex(group.colorHex, SpotifyEmerald)
     val animatedAccent by animateColorAsState(
@@ -645,6 +698,153 @@ private fun FamilyGroupManagementCard(
                     )
                 }
 
+                // Member-visible Spotify Family Info preview
+                Surface(
+                    color = SurfaceElevated,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, BorderSubtle),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_group_spotify_info_${group.effectiveId}"),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Spotify Plan Info (Visible to Members)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = animatedAccent,
+                            )
+                            Text(
+                                text = "Edit",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(enabled = !isBusy, onClick = onEditGroup)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+
+                        if (!group.hasMemberVisibleInfo) {
+                            Text(
+                                text = "No Spotify Home Address, Family Manager, or Invite Link set yet. Tap Edit to add details for assigned members.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                            )
+                        } else {
+                            if (group.managerName.isNotBlank() || group.managerEmail.isNotBlank()) {
+                                val mgrText = buildString {
+                                    if (group.managerName.isNotBlank()) append(group.managerName)
+                                    if (group.managerEmail.isNotBlank()) {
+                                        if (isNotEmpty()) append(" • ")
+                                        append(group.managerEmail)
+                                    }
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = animatedAccent,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        text = "Manager: $mgrText",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                            if (group.address.isNotBlank()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Home,
+                                            contentDescription = null,
+                                            tint = animatedAccent,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Text(
+                                            text = group.address,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onCopyText("Home Address", group.address) },
+                                        modifier = Modifier.minimumInteractiveComponentSize(),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = stringResource(R.string.cd_copy_text),
+                                            tint = TextSecondary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                }
+                            }
+                            if (group.inviteLink.isNotBlank()) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Link,
+                                        contentDescription = null,
+                                        tint = animatedAccent,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        text = group.inviteLink,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = EmeraldSoftText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            if (group.notes.isNotBlank()) {
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        text = group.notes,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextSecondary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 HorizontalDivider(color = BorderSubtle)
 
                 // Members header + Assign/Add button
@@ -798,6 +998,11 @@ fun FamilyGroupEditorDialog(
         colorHex: String,
         maxSlots: Long,
         updateActiveMonthMembers: Boolean,
+        address: String,
+        managerName: String,
+        managerEmail: String,
+        inviteLink: String,
+        notes: String,
     ) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -817,6 +1022,11 @@ fun FamilyGroupEditorDialog(
     var maxSlotsText by remember(editingGroup) {
         mutableStateOf((editingGroup?.maxSlots ?: AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS.toLong()).toString())
     }
+    var address by remember(editingGroup) { mutableStateOf(editingGroup?.address.orEmpty()) }
+    var managerName by remember(editingGroup) { mutableStateOf(editingGroup?.managerName.orEmpty()) }
+    var managerEmail by remember(editingGroup) { mutableStateOf(editingGroup?.managerEmail.orEmpty()) }
+    var inviteLink by remember(editingGroup) { mutableStateOf(editingGroup?.inviteLink.orEmpty()) }
+    var notes by remember(editingGroup) { mutableStateOf(editingGroup?.notes.orEmpty()) }
     var updateActiveMonth by remember(editingGroup) { mutableStateOf(editingGroup != null) }
     var showDatePicker by remember { mutableStateOf(false) }
 
@@ -1003,6 +1213,74 @@ fun FamilyGroupEditorDialog(
                     )
                 }
 
+                HorizontalDivider(color = BorderSubtle)
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Member-Visible Spotify Details",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = previewColor,
+                    )
+                    Text(
+                        text = "Only members assigned to this group will see these details on their Groups tab.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary,
+                    )
+                    OutlinedTextField(
+                        value = managerName,
+                        onValueChange = { managerName = it.take(80) },
+                        label = { Text("Spotify Family Manager Name") },
+                        placeholder = { Text("e.g. Thathsara") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("group_editor_manager_name_input"),
+                    )
+                    OutlinedTextField(
+                        value = managerEmail,
+                        onValueChange = { managerEmail = it.take(160) },
+                        label = { Text("Manager Spotify Email / Contact (optional)") },
+                        placeholder = { Text("e.g. owner@gmail.com") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("group_editor_manager_email_input"),
+                    )
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it.take(240) },
+                        label = { Text("Spotify Home Address") },
+                        placeholder = { Text("Exact street address for Spotify verification") },
+                        maxLines = 3,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("group_editor_address_input"),
+                    )
+                    OutlinedTextField(
+                        value = inviteLink,
+                        onValueChange = { inviteLink = it.take(300) },
+                        label = { Text("Spotify Family Invite Link (optional)") },
+                        placeholder = { Text("https://www.spotify.com/family/join/...") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("group_editor_invite_link_input"),
+                    )
+                    OutlinedTextField(
+                        value = notes,
+                        onValueChange = { notes = it.take(320) },
+                        label = { Text("Notes / Join Instructions (optional)") },
+                        placeholder = { Text("e.g. Use mobile browser & enter address above") },
+                        maxLines = 3,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("group_editor_notes_input"),
+                    )
+                }
+
                 if (editingGroup != null && currentMonth != null) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1041,6 +1319,11 @@ fun FamilyGroupEditorDialog(
                         colorHex.uppercase(Locale.US),
                         slots,
                         updateActiveMonth,
+                        address.trim(),
+                        managerName.trim(),
+                        managerEmail.trim(),
+                        inviteLink.trim(),
+                        notes.trim(),
                     )
                 },
                 enabled = !isBusy && name.isNotBlank() && amount in 1..100_000 && validDate && validHex,
@@ -1578,3 +1861,709 @@ private fun AssignMemberToGroupDialog(
         },
     )
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MemberFamilyGroupView(
+    assignedGroupId: String,
+    familyGroups: List<FamilyGroup>,
+    currentMemberKey: String,
+    currentUserEmail: String,
+    currentUserSpotifyEmail: String,
+    currentMonth: PaymentMonth?,
+    currentMonthMembers: List<MemberPaymentStatus>,
+    planConfig: PlanConfig,
+    onCopyText: (label: String, text: String) -> Unit,
+    onOpenUrl: (url: String) -> Unit,
+) {
+    val normalizedAssigned = remember(assignedGroupId) {
+        AtaPotifyConstants.normalizeFamilyGroup(assignedGroupId)
+    }
+    val group = remember(familyGroups, normalizedAssigned) {
+        familyGroups.firstOrNull { it.effectiveId == normalizedAssigned } ?: familyGroups.firstOrNull()
+    }
+
+    if (group == null) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Your Family Group info hasn't been configured yet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+                modifier = Modifier.padding(24.dp),
+            )
+        }
+        return
+    }
+
+    val groupColor = parseGroupColorHex(group.colorHex, SpotifyEmerald)
+    val animatedAccent by animateColorAsState(
+        targetValue = groupColor,
+        animationSpec = tween(320),
+        label = "member_grp_accent",
+    )
+    val startDateFormatted = remember(group.startDate) {
+        AtaPotifyConstants.formatStartDateDisplay(group.startDate)
+    }
+    val renewalHint = remember(group.startDate) {
+        AtaPotifyConstants.billingDaySummary(group.startDate)
+    }
+    val selfMonthMember = remember(currentMonthMembers, currentMemberKey) {
+        currentMonthMembers.firstOrNull { it.memberKey == currentMemberKey }
+    }
+    val groupPeers = remember(currentMonthMembers, group.effectiveId) {
+        currentMonthMembers.filter { it.normalizedGroup == group.effectiveId }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .widthIn(max = 680.dp)
+                .testTag("member_family_group_list"),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // 1. Assigned Group Hero Card
+            item(key = "member_group_hero") {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("member_group_hero_card"),
+                    shape = RoundedCornerShape(22.dp),
+                    border = BorderStroke(1.2.dp, animatedAccent.copy(alpha = 0.5f)),
+                    colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        animatedAccent.copy(alpha = 0.24f),
+                                        SurfaceDark,
+                                    )
+                                )
+                            )
+                            .padding(18.dp),
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Surface(
+                                    color = animatedAccent.copy(alpha = 0.16f),
+                                    shape = CircleShape,
+                                    border = BorderStroke(1.dp, animatedAccent.copy(alpha = 0.45f)),
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.title_my_family_group),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = animatedAccent,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    )
+                                }
+                                if (groupPeers.isNotEmpty()) {
+                                    Text(
+                                        text = "${groupPeers.size} / ${group.maxSlots} slots active",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextSecondary,
+                                    )
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .background(animatedAccent)
+                                        .border(1.5.dp, Color.White.copy(alpha = 0.55f), CircleShape),
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = group.name.ifBlank { AtaPotifyConstants.familyGroupLabel(group.effectiveId) },
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = if (renewalHint.isNotBlank()) {
+                                            "Started $startDateFormatted • $renewalHint"
+                                        } else {
+                                            "Started $startDateFormatted"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextSecondary,
+                                    )
+                                }
+                            }
+
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Surface(
+                                    color = animatedAccent.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, animatedAccent.copy(alpha = 0.4f)),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Payments,
+                                            contentDescription = null,
+                                            tint = animatedAccent,
+                                            modifier = Modifier.size(15.dp),
+                                        )
+                                        Text(
+                                            text = "LKR ${group.amountLkr} / month",
+                                            style = MonoNumericSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = animatedAccent,
+                                        )
+                                    }
+                                }
+
+                                val acctLabel = currentUserSpotifyEmail.ifBlank { currentUserEmail }
+                                if (acctLabel.isNotBlank()) {
+                                    Surface(
+                                        color = SurfaceElevated,
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, BorderSubtle),
+                                    ) {
+                                        Text(
+                                            text = if (currentUserSpotifyEmail.isNotBlank()) {
+                                                "Spotify: $currentUserSpotifyEmail"
+                                            } else {
+                                                "Account: $currentUserEmail"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Spotify Setup Details Card (Address, Family Manager, Invite Link, Notes)
+            item(key = "member_group_spotify_details") {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("member_group_info_card"),
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, BorderSubtle),
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Text(
+                            text = "Spotify Family Setup Info",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+
+                        // Home Address Block
+                        Surface(
+                            color = SurfaceElevated,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Home,
+                                            contentDescription = null,
+                                            tint = animatedAccent,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.label_spotify_address),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    if (group.address.isNotBlank()) {
+                                        FilledTonalButton(
+                                            onClick = { onCopyText("Spotify Home Address", group.address) },
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("member_copy_address_button"),
+                                            colors = ButtonDefaults.filledTonalButtonColors(
+                                                containerColor = animatedAccent.copy(alpha = 0.16f),
+                                                contentColor = animatedAccent,
+                                            ),
+                                            shape = RoundedCornerShape(10.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(15.dp),
+                                            )
+                                            Spacer(Modifier.width(5.dp))
+                                            Text("Copy", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
+                                }
+
+                                if (group.address.isNotBlank()) {
+                                    Text(
+                                        text = group.address,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = "Use this exact address when accepting your Spotify Family invite or verifying your location.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextSecondary,
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Not set by Admin yet.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted,
+                                    )
+                                }
+                            }
+                        }
+
+                        // Spotify Family Manager Block
+                        Surface(
+                            color = SurfaceElevated,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = animatedAccent,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.label_family_manager),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+
+                                if (group.managerName.isNotBlank() || group.managerEmail.isNotBlank()) {
+                                    if (group.managerName.isNotBlank()) {
+                                        Text(
+                                            text = group.managerName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    if (group.managerEmail.isNotBlank()) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = group.managerEmail,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = TextSecondary,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            IconButton(
+                                                onClick = { onCopyText("Manager Contact", group.managerEmail) },
+                                                modifier = Modifier.minimumInteractiveComponentSize(),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ContentCopy,
+                                                    contentDescription = stringResource(R.string.cd_copy_text),
+                                                    tint = TextSecondary,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Text(
+                                        text = "Not specified yet.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted,
+                                    )
+                                }
+                            }
+                        }
+
+                        // Invite Link Block (if provided)
+                        if (group.inviteLink.isNotBlank()) {
+                            Surface(
+                                color = EmeraldContainer.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, animatedAccent.copy(alpha = 0.45f)),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Link,
+                                            contentDescription = null,
+                                            tint = animatedAccent,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.label_invite_link),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    Text(
+                                        text = group.inviteLink,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = EmeraldSoftText,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        val isWebUrl = group.inviteLink.startsWith("https://", ignoreCase = true) ||
+                                            group.inviteLink.startsWith("http://", ignoreCase = true)
+                                        if (isWebUrl) {
+                                            Button(
+                                                onClick = { onOpenUrl(group.inviteLink) },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("member_open_invite_button"),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = animatedAccent,
+                                                    contentColor = ObsidianBg,
+                                                ),
+                                                shape = RoundedCornerShape(10.dp),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Open Invite", fontWeight = FontWeight.SemiBold)
+                                            }
+                                        }
+                                        OutlinedButton(
+                                            onClick = { onCopyText("Invite Link", group.inviteLink) },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("member_copy_invite_button"),
+                                            border = BorderStroke(1.dp, animatedAccent.copy(alpha = 0.5f)),
+                                            shape = RoundedCornerShape(10.dp),
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = null,
+                                                tint = animatedAccent,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("Copy Link", color = animatedAccent)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Notes & Join Instructions Block (if provided)
+                        if (group.notes.isNotBlank()) {
+                            Surface(
+                                color = AmberContainer.copy(alpha = 0.4f),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.45f)),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = AmberWarning,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(
+                                            text = stringResource(R.string.label_group_notes),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = AmberWarning,
+                                        )
+                                        Text(
+                                            text = group.notes,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Payment Status & Bank Transfer Card
+            if (selfMonthMember != null || planConfig.hasBankDetails) {
+                item(key = "member_group_payment_info") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.dp, BorderSubtle),
+                        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            if (currentMonth != null && selfMonthMember != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = currentMonth.displayLabel,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        Text(
+                                            text = when {
+                                                selfMonthMember.status == AtaPotifyConstants.STATUS_PAID ->
+                                                    if (selfMonthMember.isCashPayment) "Settled via Cash in Hand" else "Paid & Verified"
+                                                selfMonthMember.hasPartialPayment ->
+                                                    "Paid LKR ${selfMonthMember.effectivePaidLkr} • LKR ${selfMonthMember.remainingLkr} left"
+                                                selfMonthMember.status == AtaPotifyConstants.STATUS_VERIFYING ->
+                                                    "Receipt uploaded • Awaiting Admin confirmation"
+                                                else -> "LKR ${selfMonthMember.amountLkr} due"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextSecondary,
+                                        )
+                                    }
+                                    val statusColor = when (selfMonthMember.status) {
+                                        AtaPotifyConstants.STATUS_PAID -> SpotifyEmerald
+                                        AtaPotifyConstants.STATUS_VERIFYING -> AmberWarning
+                                        else -> CoralPending
+                                    }
+                                    val statusLabel = when {
+                                        selfMonthMember.status == AtaPotifyConstants.STATUS_PAID -> "Paid"
+                                        selfMonthMember.status == AtaPotifyConstants.STATUS_VERIFYING -> "Verifying"
+                                        selfMonthMember.hasPartialPayment -> "Partial"
+                                        else -> "Pending"
+                                    }
+                                    Surface(
+                                        color = statusColor.copy(alpha = 0.16f),
+                                        shape = CircleShape,
+                                        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.45f)),
+                                    ) {
+                                        Text(
+                                            text = statusLabel,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = statusColor,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (planConfig.hasBankDetails) {
+                                if (selfMonthMember != null) {
+                                    HorizontalDivider(color = BorderSubtle)
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.AccountBalance,
+                                            contentDescription = null,
+                                            tint = SpotifyEmerald,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Text(
+                                            text = stringResource(R.string.title_bank_details),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            onCopyText("Bank Details", planConfig.formattedBankCopyText())
+                                        },
+                                        modifier = Modifier.minimumInteractiveComponentSize(),
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = EmeraldContainer,
+                                            contentColor = SpotifyEmerald,
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(15.dp),
+                                        )
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("Copy", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
+                                Text(
+                                    text = planConfig.formattedBankCopyText(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextSecondary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Plan Peers in This Group (Display names only — zero PII)
+            if (groupPeers.isNotEmpty()) {
+                item(key = "member_group_peers") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.dp, BorderSubtle),
+                        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = "Members in ${group.name} (${groupPeers.size}/${group.maxSlots})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                groupPeers.forEach { peer ->
+                                    val isSelf = peer.memberKey == currentMemberKey
+                                    Surface(
+                                        color = if (isSelf) animatedAccent.copy(alpha = 0.16f) else SurfaceElevated,
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isSelf) animatedAccent.copy(alpha = 0.5f) else BorderSubtle,
+                                        ),
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            if (peer.status == AtaPotifyConstants.STATUS_PAID) {
+                                                Icon(
+                                                    imageVector = Icons.Default.CheckCircle,
+                                                    contentDescription = null,
+                                                    tint = SpotifyEmerald,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                            }
+                                            Text(
+                                                text = if (isSelf) "${peer.displayName} (You)" else peer.displayName,
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = if (isSelf) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelf) animatedAccent else MaterialTheme.colorScheme.onSurface,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item { Spacer(Modifier.height(16.dp)) }
+        }
+    }
+}
+

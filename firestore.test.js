@@ -587,7 +587,7 @@ test("Family Groups CRUD: Admin can create/update/delete groups, whitelisted mem
   const strangerDb = memberContext(STRANGER_UID, STRANGER_EMAIL).firestore();
   const now = new Date();
 
-  // Admin creates custom Family Group with start date, price split, and custom color hex
+  // Admin creates custom Family Group with start date, price split, custom color hex, address, manager, invite link, and notes
   await assertSucceeds(
     adminDb.collection("family_groups").doc("grp_colombo").set({
       groupId: "grp_colombo",
@@ -597,6 +597,27 @@ test("Family Groups CRUD: Admin can create/update/delete groups, whitelisted mem
       colorHex: "#A78BFA",
       maxSlots: 6,
       sortOrder: 2,
+      address: "42 Galle Road, Colombo 03",
+      managerName: "Thathsara",
+      managerEmail: "thathsara.spotify@gmail.com",
+      inviteLink: "https://www.spotify.com/family/join/test123",
+      notes: "Enter the exact Galle Road address when accepting the invite.",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Oversized address (>240 chars) is rejected even for Admin
+  await assertFails(
+    adminDb.collection("family_groups").doc("grp_bad_addr").set({
+      groupId: "grp_bad_addr",
+      name: "Bad Address",
+      startDate: "2026-11-05",
+      amountLkr: 450,
+      colorHex: "#1ED760",
+      maxSlots: 6,
+      sortOrder: 3,
+      address: "x".repeat(250),
       createdAt: now,
       updatedAt: now,
     })
@@ -645,15 +666,26 @@ test("Family Groups CRUD: Admin can create/update/delete groups, whitelisted mem
       updatedAt: new Date(),
     })
   );
+  await assertFails(
+    aliceDb.collection("family_groups").doc("grp_colombo").update({
+      address: "Tampered Address",
+      updatedAt: new Date(),
+    })
+  );
   await assertFails(aliceDb.collection("family_groups").doc("grp_colombo").delete());
 
-  // Admin updates name, price split, start date, and color hex
+  // Admin updates name, price split, start date, color hex, address, manager, invite link, and notes
   await assertSucceeds(
     adminDb.collection("family_groups").doc("grp_colombo").update({
       name: "Colombo Squad",
       startDate: "2026-11-10",
       amountLkr: 550,
       colorHex: "#F472B6",
+      address: "100 Duplication Road, Colombo 04",
+      managerName: "Yasiru",
+      managerEmail: "yasiru.manager@gmail.com",
+      inviteLink: "https://www.spotify.com/family/join/updated456",
+      notes: "Use mobile browser to accept.",
       updatedAt: new Date(),
     })
   );

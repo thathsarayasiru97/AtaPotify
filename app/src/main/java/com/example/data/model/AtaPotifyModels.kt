@@ -388,11 +388,23 @@ data class FamilyGroup(
     val colorHex: String = AtaPotifyConstants.DEFAULT_GROUP_1_COLOR_HEX,
     val maxSlots: Long = AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS.toLong(),
     val sortOrder: Long = 0L,
+    val address: String = "",
+    val managerName: String = "",
+    val managerEmail: String = "",
+    val inviteLink: String = "",
+    val notes: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 ) {
     val effectiveId: String
         get() = AtaPotifyConstants.normalizeFamilyGroup(groupId.ifBlank { id })
+
+    val hasMemberVisibleInfo: Boolean
+        get() = address.isNotBlank() ||
+            managerName.isNotBlank() ||
+            managerEmail.isNotBlank() ||
+            inviteLink.isNotBlank() ||
+            notes.isNotBlank()
 }
 
 fun resolveEffectiveFamilyGroups(

@@ -363,6 +363,19 @@ class MonthlyBillingSummaryTest {
         org.junit.Assert.assertTrue(whatsappSummary.contains("[PAID • Cash]"))
         org.junit.Assert.assertTrue(whatsappSummary.contains("[PARTIAL] (LKR 200/450 paid • LKR 250 left)"))
     }
+
+    @Test
+    fun familyGroupHasMemberVisibleInfoReflectsConfiguredDetails() {
+        val emptyGroup = FamilyGroup(groupId = "group_1", name = "Family 1")
+        org.junit.Assert.assertFalse(emptyGroup.hasMemberVisibleInfo)
+
+        org.junit.Assert.assertTrue(emptyGroup.copy(address = "123 Galle Rd, Colombo").hasMemberVisibleInfo)
+        org.junit.Assert.assertTrue(emptyGroup.copy(managerName = "Thathsara").hasMemberVisibleInfo)
+        org.junit.Assert.assertTrue(emptyGroup.copy(managerEmail = "manager@gmail.com").hasMemberVisibleInfo)
+        org.junit.Assert.assertTrue(emptyGroup.copy(inviteLink = "https://spotify.com/family/join/abc").hasMemberVisibleInfo)
+        org.junit.Assert.assertTrue(emptyGroup.copy(notes = "Enter the address above when joining").hasMemberVisibleInfo)
+        org.junit.Assert.assertFalse(emptyGroup.copy(address = "   ", notes = "\n ").hasMemberVisibleInfo)
+    }
 }
 
 

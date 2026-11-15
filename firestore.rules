@@ -108,6 +108,11 @@ service cloud.firestore {
         isValidColorHex(data.colorHex) &&
         data.maxSlots is int && data.maxSlots >= 1 && data.maxSlots <= 20 &&
         data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 1000 &&
+        (!('address' in data) || (data.address is string && data.address.size() <= 240)) &&
+        (!('managerName' in data) || (data.managerName is string && data.managerName.size() <= 80)) &&
+        (!('managerEmail' in data) || (data.managerEmail is string && data.managerEmail.size() <= 160)) &&
+        (!('inviteLink' in data) || (data.inviteLink is string && data.inviteLink.size() <= 300)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 320)) &&
         data.createdAt is timestamp && data.createdAt <= request.time &&
         data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -275,7 +280,7 @@ service cloud.firestore {
         isValidId(groupId) &&
         incoming().groupId == groupId &&
         incoming().keys().hasAll(['groupId', 'name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'createdAt', 'updatedAt']) &&
-        incoming().keys().hasOnly(['groupId', 'name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['groupId', 'name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'address', 'managerName', 'managerEmail', 'inviteLink', 'notes', 'createdAt', 'updatedAt']) &&
         isValidFamilyGroup(incoming());
 
       allow update: if isAdmin() &&
@@ -283,7 +288,7 @@ service cloud.firestore {
         isValidFamilyGroup(incoming()) &&
         incoming().groupId == existing().groupId &&
         incoming().createdAt == existing().createdAt &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'updatedAt']);
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'address', 'managerName', 'managerEmail', 'inviteLink', 'notes', 'updatedAt']);
 
       allow delete: if isAdmin() && isValidId(groupId);
     }

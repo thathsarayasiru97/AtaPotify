@@ -161,6 +161,11 @@ class PaymentRepository(
         alsoUpdateActiveMonthMembers: Boolean,
         activeMonth: PaymentMonth?,
         activeMonthMembers: List<MemberPaymentStatus>,
+        address: String = "",
+        managerName: String = "",
+        managerEmail: String = "",
+        inviteLink: String = "",
+        notes: String = "",
     ): Result<String> {
         requireUserId()
         val cleanName = name.trim().take(40)
@@ -172,6 +177,11 @@ class PaymentRepository(
         require(amountLkr in 1..100_000) { "Amount must be between 1 and 100,000 LKR" }
         val cleanColor = AtaPotifyConstants.normalizeHexColor(colorHex)
         val safeSlots = maxSlots.coerceIn(1L, 20L)
+        val cleanAddress = address.trim().take(240)
+        val cleanManagerName = managerName.trim().take(80)
+        val cleanManagerEmail = managerEmail.trim().take(160)
+        val cleanInviteLink = inviteLink.trim().take(300)
+        val cleanNotes = notes.trim().take(320)
 
         val targetId = if (!groupId.isNullOrBlank()) {
             AtaPotifyConstants.normalizeFamilyGroup(groupId)
@@ -202,6 +212,11 @@ class PaymentRepository(
                     "amountLkr" to amountLkr,
                     "colorHex" to cleanColor,
                     "maxSlots" to safeSlots,
+                    "address" to cleanAddress,
+                    "managerName" to cleanManagerName,
+                    "managerEmail" to cleanManagerEmail,
+                    "inviteLink" to cleanInviteLink,
+                    "notes" to cleanNotes,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
             )
@@ -218,6 +233,11 @@ class PaymentRepository(
                     "colorHex" to cleanColor,
                     "maxSlots" to safeSlots,
                     "sortOrder" to nextSort.coerceIn(0L, 1000L),
+                    "address" to cleanAddress,
+                    "managerName" to cleanManagerName,
+                    "managerEmail" to cleanManagerEmail,
+                    "inviteLink" to cleanInviteLink,
+                    "notes" to cleanNotes,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -359,9 +379,17 @@ class PaymentRepository(
         }
     }
 
-    fun observeWhitelist(): Flow<List<WhitelistMember>> {
+    fun observeWhitelist(
+        userEmailLower: String = "",
+        isAdmin: Boolean = true,
+    ): Flow<List<WhitelistMember>> {
         val path = "whitelist"
-        return db.collection(path)
+        val query = if (isAdmin) {
+            db.collection(path)
+        } else {
+            db.collection(path).whereEqualTo("email", AtaPotifyConstants.normalizeEmail(userEmailLower))
+        }
+        return query
             .snapshots()
             .map { snapshot ->
                 snapshot.toObjects(WhitelistMember::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)

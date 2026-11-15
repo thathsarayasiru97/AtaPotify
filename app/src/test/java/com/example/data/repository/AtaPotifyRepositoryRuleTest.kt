@@ -338,7 +338,7 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertTrue(initialGroups.any { it.effectiveId == AtaPotifyConstants.GROUP_1 })
         assertTrue(initialGroups.any { it.effectiveId == AtaPotifyConstants.GROUP_2 })
 
-        val customGroupId = step("admin create custom family group") {
+        val customGroupId = step("admin create custom family group with spotify details") {
             paymentRepo.saveFamilyGroup(
                 groupId = null,
                 name = "Uni Squad",
@@ -350,6 +350,11 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
                 alsoUpdateActiveMonthMembers = false,
                 activeMonth = null,
                 activeMonthMembers = emptyList(),
+                address = "42 Reid Avenue, Colombo 07",
+                managerName = "Thathsara",
+                managerEmail = "thathsara.host@gmail.com",
+                inviteLink = "https://www.spotify.com/family/join/invite/unisquad",
+                notes = "Use the exact street address above before accepting.",
             ).getOrThrow()
         }
 
@@ -361,6 +366,11 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertEquals("2026-11-15", customGroup.startDate)
         assertEquals(520L, customGroup.amountLkr)
         assertEquals("#A855F7", customGroup.colorHex)
+        assertEquals("42 Reid Avenue, Colombo 07", customGroup.address)
+        assertEquals("Thathsara", customGroup.managerName)
+        assertEquals("thathsara.host@gmail.com", customGroup.managerEmail)
+        assertEquals("https://www.spotify.com/family/join/invite/unisquad", customGroup.inviteLink)
+        assertEquals("Use the exact street address above before accepting.", customGroup.notes)
 
         val friendEmail = "squad_${UUID.randomUUID().toString().take(6)}@gmail.com"
         val friendKey = AtaPotifyConstants.memberKeyForEmail(friendEmail)
@@ -385,6 +395,25 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
         val wlMember = whitelist.first { it.memberKey == friendKey }
         assertEquals(customGroupId, wlMember.normalizedGroup)
+
+        // Verify assigned whitelisted member can observe their own whitelist record and assigned group details
+        signInTestUser(friendEmail)
+        val friendScopedWhitelist = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeWhitelist(userEmailLower = friendEmail, isAdmin = false)
+                .first { list -> list.any { it.memberKey == friendKey } }
+        }
+        assertEquals(1, friendScopedWhitelist.size)
+        assertEquals(customGroupId, friendScopedWhitelist.first().normalizedGroup)
+        val friendObservedGroups = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeFamilyGroups().first { list -> list.any { it.effectiveId == customGroupId } }
+        }
+        val friendCustomGroup = friendObservedGroups.first { it.effectiveId == customGroupId }
+        assertEquals("42 Reid Avenue, Colombo 07", friendCustomGroup.address)
+        assertEquals("Thathsara", friendCustomGroup.managerName)
+        assertEquals("https://www.spotify.com/family/join/invite/unisquad", friendCustomGroup.inviteLink)
+
+        // Sign back in as Admin to continue month creation and management assertions
+        signInTestUser(AtaPotifyConstants.ADMIN_EMAIL)
 
         step("admin startNewMonth with per-group pricing") {
             paymentRepo.startNewMonth(

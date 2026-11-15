@@ -71,6 +71,11 @@
     <string name="cd_copy_text">Copy to clipboard</string>
     <string name="title_bank_details">Bank Transfer Details</string>
     <string name="title_wrapped_summary">All-Time AtaPotify Wrapped</string>
+    <string name="title_my_family_group">My Family Group</string>
+    <string name="label_spotify_address">Spotify Home Address</string>
+    <string name="label_family_manager">Spotify Family Manager</string>
+    <string name="label_invite_link">Family Invite Link</string>
+    <string name="label_group_notes">Notes &amp; Instructions</string>
 </resources>
 
 

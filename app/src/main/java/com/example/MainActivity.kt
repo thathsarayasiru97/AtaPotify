@@ -437,11 +437,11 @@ private fun MainAppScaffold(
 
     val tabs = remember(session.isAdmin) {
         if (session.isAdmin) listOf(AppTab.BOARD, AppTab.HISTORY, AppTab.GROUPS, AppTab.ADMIN)
-        else listOf(AppTab.BOARD, AppTab.HISTORY)
+        else listOf(AppTab.BOARD, AppTab.HISTORY, AppTab.GROUPS)
     }
 
     LaunchedEffect(session.isAdmin) {
-        if (!session.isAdmin && (selectedTab == AppTab.ADMIN || selectedTab == AppTab.GROUPS)) {
+        if (!session.isAdmin && selectedTab == AppTab.ADMIN) {
             selectedTab = AppTab.BOARD
         }
     }
@@ -905,52 +905,95 @@ private fun MainAppScaffold(
                             onOpenSpotifyQuery = { query -> viewModel.openInSpotifySearch(context, query) },
                         )
 
-                        AppTab.GROUPS -> FamilyGroupsScreen(
-                            familyGroups = familyGroups,
-                            whitelist = whitelist,
-                            currentMonth = currentMonth,
-                            defaultAmountLkr = planConfig.monthlyAmountLkr,
-                            isBusy = isBusy,
-                            onCreateOrUpdateGroup = { groupId, name, startDate, amountLkr, colorHex, maxSlots, updateActiveMonth, onDone ->
-                                viewModel.saveFamilyGroup(
-                                    groupId = groupId,
-                                    name = name,
-                                    startDate = startDate,
-                                    amountLkr = amountLkr,
-                                    colorHex = colorHex,
-                                    maxSlots = maxSlots,
-                                    alsoUpdateActiveMonthMembers = updateActiveMonth,
-                                    onDone = onDone,
-                                )
-                            },
-                            onDeleteGroup = { group, reassignToGroupId, onDone ->
-                                viewModel.deleteFamilyGroup(
-                                    group = group,
-                                    reassignToGroupId = reassignToGroupId,
-                                    onDone = onDone,
-                                )
-                            },
-                            onTransferMember = { memberKey, memberName, targetGroupId, updateMonthAmount, onDone ->
-                                viewModel.transferMemberToGroup(
-                                    memberKey = memberKey,
-                                    memberName = memberName,
-                                    targetGroupId = targetGroupId,
-                                    updateActiveMonthAmount = updateMonthAmount,
-                                    onDone = onDone,
-                                )
-                            },
-                            onAddNewMemberToGroup = { email, displayName, phone, spotifyEmail, targetGroupId, onDone ->
-                                viewModel.upsertWhitelistMember(
-                                    email = email,
-                                    displayName = displayName,
-                                    phone = phone,
-                                    active = true,
-                                    spotifyEmail = spotifyEmail,
-                                    familyGroup = targetGroupId,
-                                    onDone = onDone,
-                                )
-                            },
-                        )
+                        AppTab.GROUPS -> {
+                            val resolvedAssignedGroupId = whitelist
+                                .firstOrNull { it.memberKey == session.memberKey }
+                                ?.normalizedGroup
+                                ?: currentMonthMembers
+                                    .firstOrNull { it.memberKey == session.memberKey }
+                                    ?.normalizedGroup
+                                ?: session.familyGroup
+                            val resolvedSpotifyEmail = userProfile?.spotifyEmail
+                                ?.takeIf { it.isNotBlank() }
+                                ?: whitelist.firstOrNull { it.memberKey == session.memberKey }?.spotifyEmail
+                                ?: session.spotifyEmail
+
+                            FamilyGroupsScreen(
+                                isAdmin = session.isAdmin,
+                                currentMemberKey = session.memberKey,
+                                currentUserEmail = session.email,
+                                currentUserSpotifyEmail = resolvedSpotifyEmail,
+                                assignedGroupId = resolvedAssignedGroupId,
+                                familyGroups = familyGroups,
+                                whitelist = whitelist,
+                                currentMonth = currentMonth,
+                                currentMonthMembers = currentMonthMembers,
+                                planConfig = planConfig,
+                                defaultAmountLkr = planConfig.monthlyAmountLkr,
+                                isBusy = isBusy,
+                                onCopyText = copyToClipboard,
+                                onOpenUrl = { rawUrl ->
+                                    val cleanUrl = rawUrl.trim()
+                                    if (cleanUrl.startsWith("https://", ignoreCase = true) ||
+                                        cleanUrl.startsWith("http://", ignoreCase = true)
+                                    ) {
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(cleanUrl)).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                            )
+                                        }.onFailure {
+                                            viewModel.emitSnackbar("Unable to open invite link")
+                                        }
+                                    }
+                                },
+                                onCreateOrUpdateGroup = { groupId, name, startDate, amountLkr, colorHex, maxSlots, updateActiveMonth, address, managerName, managerEmail, inviteLink, notes, onDone ->
+                                    viewModel.saveFamilyGroup(
+                                        groupId = groupId,
+                                        name = name,
+                                        startDate = startDate,
+                                        amountLkr = amountLkr,
+                                        colorHex = colorHex,
+                                        maxSlots = maxSlots,
+                                        alsoUpdateActiveMonthMembers = updateActiveMonth,
+                                        address = address,
+                                        managerName = managerName,
+                                        managerEmail = managerEmail,
+                                        inviteLink = inviteLink,
+                                        notes = notes,
+                                        onDone = onDone,
+                                    )
+                                },
+                                onDeleteGroup = { group, reassignToGroupId, onDone ->
+                                    viewModel.deleteFamilyGroup(
+                                        group = group,
+                                        reassignToGroupId = reassignToGroupId,
+                                        onDone = onDone,
+                                    )
+                                },
+                                onTransferMember = { memberKey, memberName, targetGroupId, updateMonthAmount, onDone ->
+                                    viewModel.transferMemberToGroup(
+                                        memberKey = memberKey,
+                                        memberName = memberName,
+                                        targetGroupId = targetGroupId,
+                                        updateActiveMonthAmount = updateMonthAmount,
+                                        onDone = onDone,
+                                    )
+                                },
+                                onAddNewMemberToGroup = { email, displayName, phone, spotifyEmail, targetGroupId, onDone ->
+                                    viewModel.upsertWhitelistMember(
+                                        email = email,
+                                        displayName = displayName,
+                                        phone = phone,
+                                        active = true,
+                                        spotifyEmail = spotifyEmail,
+                                        familyGroup = targetGroupId,
+                                        onDone = onDone,
+                                    )
+                                },
+                            )
+                        }
 
                         AppTab.ADMIN -> AdminScreen(
                             planConfig = planConfig,

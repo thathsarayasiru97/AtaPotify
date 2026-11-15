@@ -142,7 +142,7 @@
     },
     "FamilyGroup": {
       "title": "FamilyGroup",
-      "description": "Admin-managed Spotify Family plan group with custom name, starting date, per-member LKR split, slot capacity, and theme color.",
+      "description": "Admin-managed Spotify Family plan group with custom name, starting date, per-member LKR split, slot capacity, theme color, and member-visible Spotify setup details.",
       "type": "object",
       "properties": {
         "groupId": { "type": "string", "description": "Unique group identifier (e.g. group_1, group_2, grp_xxxx)" },
@@ -152,6 +152,11 @@
         "colorHex": { "type": "string", "description": "Hex accent color in #RRGGBB format" },
         "maxSlots": { "type": "integer", "description": "Maximum member slots for this family plan (default 6)" },
         "sortOrder": { "type": "integer", "description": "Display order index" },
+        "address": { "type": "string", "description": "Spotify Family Home Address assigned to this group for member verification" },
+        "managerName": { "type": "string", "description": "Spotify Family Manager display name or profile handle" },
+        "managerEmail": { "type": "string", "description": "Spotify Family Manager email or contact identifier" },
+        "inviteLink": { "type": "string", "description": "Optional Spotify Family invite URL for assigned members" },
+        "notes": { "type": "string", "description": "Optional setup instructions or notes shown to assigned members" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
       },
