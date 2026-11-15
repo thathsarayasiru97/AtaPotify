@@ -20,10 +20,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Save
@@ -34,6 +37,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -52,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.AccessRequest
 import com.example.data.model.PaymentMonth
 import com.example.data.model.PlanConfig
 import com.example.data.model.WhitelistMember
@@ -73,7 +78,10 @@ fun AdminScreen(
     planConfig: PlanConfig,
     currentMonth: PaymentMonth?,
     whitelist: List<WhitelistMember>,
+    pendingRequests: List<AccessRequest> = emptyList(),
     isBusy: Boolean,
+    onApproveRequest: (AccessRequest) -> Unit = {},
+    onDeclineRequest: (AccessRequest) -> Unit = {},
     onSaveLkrRate: (Long, Boolean) -> Unit,
     onSaveBankDetails: (bankName: String, accountNumber: String, accountHolder: String, branch: String) -> Unit = { _, _, _, _ -> },
     onCopyText: (label: String, text: String) -> Unit = { _, _ -> },
@@ -103,7 +111,7 @@ fun AdminScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item {
+            item(key = "admin_header") {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = "Admin Controls",
@@ -111,9 +119,48 @@ fun AdminScreen(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        text = "Manage the fixed monthly LKR split, bank transfer details, and whitelisted friends.",
+                        text = "Approve join requests, manage the monthly LKR split, bank transfer details, and family members.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
+                    )
+                }
+            }
+
+            if (pendingRequests.isNotEmpty()) {
+                item(key = "pending_requests_header") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .animateItem(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.HowToReg,
+                                contentDescription = null,
+                                tint = AmberWarning,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                text = "Pending Approval Requests (${pendingRequests.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = AmberWarning,
+                            )
+                        }
+                    }
+                }
+
+                items(pendingRequests, key = { "req_${it.uid.ifBlank { it.id }}" }) { request ->
+                    AccessRequestCard(
+                        request = request,
+                        isBusy = isBusy,
+                        modifier = Modifier.animateItem(),
+                        onApprove = { onApproveRequest(request) },
+                        onDecline = { onDeclineRequest(request) },
                     )
                 }
             }
@@ -309,15 +356,17 @@ fun AdminScreen(
                 }
             }
 
-            item {
+            item(key = "whitelist_header") {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateItem(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
                         Text(
-                            text = "Whitelisted Friends (${whitelist.size})",
+                            text = "Approved Members (${whitelist.size})",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onBackground,
                         )
@@ -351,9 +400,11 @@ fun AdminScreen(
             }
 
             if (whitelist.isEmpty()) {
-                item {
+                item(key = "whitelist_empty") {
                     Card(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .animateItem(),
                         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                         border = BorderStroke(1.dp, BorderSubtle),
                         shape = RoundedCornerShape(16.dp),
@@ -366,12 +417,12 @@ fun AdminScreen(
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Text(
-                                text = "No whitelisted friends yet",
+                                text = "No approved members yet",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
-                                text = "Tap Add Friend to allowlist Google accounts and save their WhatsApp numbers.",
+                                text = "Friends who sign in with Google appear above for approval, or tap Add Friend manually.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary,
                             )
@@ -383,6 +434,7 @@ fun AdminScreen(
                     WhitelistRosterCard(
                         member = member,
                         isBusy = isBusy,
+                        modifier = Modifier.animateItem(),
                         onCopySpotifyEmail = {
                             if (member.spotifyEmail.isNotBlank()) {
                                 onCopyText("Spotify Email", member.spotifyEmail)
@@ -401,16 +453,132 @@ fun AdminScreen(
 }
 
 @Composable
+private fun AccessRequestCard(
+    request: AccessRequest,
+    isBusy: Boolean,
+    modifier: Modifier = Modifier,
+    onApprove: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    val reqUid = request.uid.ifBlank { request.id }
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("access_request_card_$reqUid"),
+        colors = CardDefaults.cardColors(containerColor = SurfaceElevated),
+        border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.45f)),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = request.displayName.ifBlank { request.email },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "Google: ${request.email}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                    if (request.spotifyEmail.isNotBlank()) {
+                        Text(
+                            text = "Spotify: ${request.spotifyEmail}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = SpotifyEmerald,
+                        )
+                    }
+                    if (request.phone.isNotBlank()) {
+                        Text(
+                            text = "WhatsApp: +${request.phone}",
+                            style = MonoNumericSmall.copy(fontSize = 12.sp),
+                            color = TextMuted,
+                        )
+                    }
+                }
+                Surface(
+                    color = AmberContainer,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text(
+                        text = "Pending",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberWarning,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onDecline,
+                    enabled = !isBusy,
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("decline_request_$reqUid"),
+                    border = BorderStroke(1.dp, CoralPending.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        tint = CoralPending,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Decline", color = CoralPending)
+                }
+                Button(
+                    onClick = onApprove,
+                    enabled = !isBusy,
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("approve_request_$reqUid"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SpotifyEmerald,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Approve")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun WhitelistRosterCard(
     member: WhitelistMember,
     isBusy: Boolean,
+    modifier: Modifier = Modifier,
     onCopySpotifyEmail: () -> Unit,
     onEdit: () -> Unit,
     onToggleActive: (Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .testTag("whitelist_card_${member.memberKey}"),
         colors = CardDefaults.cardColors(containerColor = SurfaceElevated),

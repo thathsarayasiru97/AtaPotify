@@ -103,6 +103,8 @@ fun ProfileEditorSheet(
     profile: UserProfile?,
     spotifyConnected: Boolean,
     spotifyName: String,
+    notificationsEnabled: Boolean = true,
+    onEnableNotifications: () -> Unit = {},
     isBusy: Boolean,
     onSaveProfile: (String, String, String) -> Unit,
     onDisconnectSpotify: () -> Unit,
@@ -127,6 +129,7 @@ fun ProfileEditorSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -215,6 +218,66 @@ fun ProfileEditorSheet(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.btn_save_profile))
+            }
+
+            Surface(
+                color = if (notificationsEnabled) EmeraldContainer.copy(alpha = 0.45f) else AmberContainer.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (notificationsEnabled) SpotifyEmerald.copy(alpha = 0.35f) else AmberWarning.copy(alpha = 0.45f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.NotificationsActive,
+                            contentDescription = null,
+                            tint = if (notificationsEnabled) SpotifyEmerald else AmberWarning,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Column {
+                            Text(
+                                text = if (notificationsEnabled) {
+                                    "Cycle Reminders Active"
+                                } else {
+                                    "Cycle Reminders Off"
+                                },
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (notificationsEnabled) SpotifyEmerald else AmberWarning,
+                            )
+                            Text(
+                                text = if (notificationsEnabled) {
+                                    "Alerts when a new billing cycle starts & payment is due"
+                                } else {
+                                    "Enable notifications for new cycle & due alerts"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                            )
+                        }
+                    }
+                    if (!notificationsEnabled) {
+                        TextButton(
+                            onClick = onEnableNotifications,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("profile_enable_notifications_button"),
+                        ) {
+                            Text("Enable", color = AmberWarning, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
 
             if (spotifyConnected) {

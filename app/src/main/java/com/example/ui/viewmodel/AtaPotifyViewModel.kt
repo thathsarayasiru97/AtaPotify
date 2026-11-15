@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.error.unwrapFirestoreException
+import com.example.data.model.AccessRequest
 import com.example.data.model.AllTimeWrappedSummary
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.ListeningStat
@@ -26,12 +27,15 @@ import com.example.data.service.AppUpdateService
 import com.example.data.service.GitHubAppRelease
 import com.example.data.service.ImageCompressor
 import com.example.data.service.SpotifyStatsService
+import com.example.data.worker.BillingReminderNotifier
+import com.example.data.worker.BillingReminderScheduler
 import com.example.data.worker.SpotifySyncScheduler
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseUser
 import java.net.URLEncoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -48,6 +52,11 @@ import kotlinx.coroutines.launch
 
 sealed interface AuthGateUiState {
     data object CheckingAccess : AuthGateUiState
+    data class AwaitingApproval(
+        val info: AccessResolution.AwaitingApproval,
+        val isSavingDetails: Boolean = false,
+        val infoMessage: String? = null,
+    ) : AuthGateUiState
     data class Denied(val email: String, val errorMessage: String? = null) : AuthGateUiState
     data class Authorized(val session: AccessResolution.Authorized) : AuthGateUiState
 }
@@ -75,11 +84,15 @@ class AuthGateViewModel(
     private val _authGateState = MutableStateFlow<AuthGateUiState>(AuthGateUiState.CheckingAccess)
     val authGateState: StateFlow<AuthGateUiState> = _authGateState.asStateFlow()
 
+    private var approvalWatchJob: Job? = null
+
     init {
         verifyAccess()
     }
 
     fun verifyAccess() {
+        approvalWatchJob?.cancel()
+        approvalWatchJob = null
         viewModelScope.launch {
             _authGateState.value = AuthGateUiState.CheckingAccess
             val result = authRepository.resolveAccessAndSyncProfile(firebaseUser)
@@ -87,6 +100,10 @@ class AuthGateViewModel(
                 onSuccess = { resolution ->
                     when (resolution) {
                         is AccessResolution.Authorized -> AuthGateUiState.Authorized(resolution)
+                        is AccessResolution.AwaitingApproval -> {
+                            startWatchingForApproval(resolution.email)
+                            AuthGateUiState.AwaitingApproval(info = resolution)
+                        }
                         is AccessResolution.Denied -> AuthGateUiState.Denied(resolution.email)
                     }
                 },
@@ -95,6 +112,50 @@ class AuthGateViewModel(
                     AuthGateUiState.Denied(
                         email = firebaseUser.email.orEmpty(),
                         errorMessage = error.localizedMessage ?: "Unable to verify access",
+                    )
+                },
+            )
+        }
+    }
+
+    private fun startWatchingForApproval(emailLower: String) {
+        approvalWatchJob?.cancel()
+        approvalWatchJob = viewModelScope.launch {
+            authRepository.observeOwnWhitelistApproval(emailLower).collect { isApproved ->
+                if (isApproved) {
+                    verifyAccess()
+                }
+            }
+        }
+    }
+
+    fun updatePendingDetails(displayName: String, phone: String, spotifyEmail: String) {
+        val current = _authGateState.value as? AuthGateUiState.AwaitingApproval ?: return
+        viewModelScope.launch {
+            _authGateState.value = current.copy(isSavingDetails = true, infoMessage = null)
+            val res = authRepository.updatePendingAccessRequestDetails(
+                displayName = displayName,
+                phone = phone,
+                spotifyEmail = spotifyEmail,
+            )
+            _authGateState.value = res.fold(
+                onSuccess = {
+                    val latest = _authGateState.value as? AuthGateUiState.AwaitingApproval
+                    latest?.copy(
+                        info = latest.info.copy(
+                            displayName = displayName.trim(),
+                            phone = AtaPotifyConstants.sanitizeWhatsAppDigits(phone),
+                            spotifyEmail = AtaPotifyConstants.normalizeEmail(spotifyEmail),
+                            requestStatus = AtaPotifyConstants.STATUS_PENDING,
+                        ),
+                        isSavingDetails = false,
+                        infoMessage = "Details updated & sent to Admin",
+                    ) ?: current
+                },
+                onFailure = { error ->
+                    current.copy(
+                        isSavingDetails = false,
+                        infoMessage = error.localizedMessage ?: "Unable to save details",
                     )
                 },
             )
@@ -174,6 +235,18 @@ class AtaPotifyViewModel(
                 val fsErr = error.unwrapFirestoreException()
                 if (fsErr == null && error is CancellationException) throw error
                 Log.w(TAG, "Error observing whitelist", fsErr ?: error)
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+    } else {
+        MutableStateFlow(emptyList())
+    }
+
+    val pendingAccessRequests: StateFlow<List<AccessRequest>> = if (session.isAdmin) {
+        paymentRepository.observePendingAccessRequests()
+            .catch { error ->
+                val fsErr = error.unwrapFirestoreException()
+                if (fsErr == null && error is CancellationException) throw error
+                Log.w(TAG, "Error observing pending access requests", fsErr ?: error)
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
     } else {
@@ -272,6 +345,7 @@ class AtaPotifyViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     init {
+        BillingReminderScheduler.schedulePeriodicChecks(appContext)
         if (session.isAdmin) {
             viewModelScope.launch {
                 paymentRepository.ensureDefaultPlanConfigIfAdmin()
@@ -283,6 +357,37 @@ class AtaPotifyViewModel(
                         _showAutoReminderSheet.value = true
                     }
                 }
+            }
+            viewModelScope.launch {
+                pendingAccessRequests.collect { list ->
+                    if (list.isNotEmpty()) {
+                        BillingReminderNotifier.notifyAdminPendingRequestsIfNeeded(
+                            context = appContext,
+                            uid = session.uid,
+                            pendingCount = list.size,
+                        )
+                    } else {
+                        BillingReminderNotifier.clearAdminRequestCountCache(appContext, session.uid)
+                    }
+                }
+            }
+        } else {
+            viewModelScope.launch {
+                combine(currentMonth, currentMonthMembers) { month, members -> month to members }
+                    .collect { (month, members) ->
+                        if (month != null && members.isNotEmpty()) {
+                            val selfMember = members.firstOrNull {
+                                it.memberKey == session.memberKey ||
+                                    it.memberEmail.equals(session.email, ignoreCase = true)
+                            }
+                            BillingReminderNotifier.notifyMemberForCycleIfNeeded(
+                                context = appContext,
+                                uid = session.uid,
+                                month = month,
+                                memberStatus = selfMember,
+                            )
+                        }
+                    }
             }
         }
         if (spotifyService.isClientIdConfigured && spotifyService.isConnected) {
@@ -302,6 +407,29 @@ class AtaPotifyViewModel(
                 }
         }
         checkForAppUpdate(manual = false)
+    }
+
+    fun notifyRemindersPermissionGranted() {
+        BillingReminderScheduler.schedulePeriodicChecks(appContext)
+        val month = currentMonth.value ?: return
+        if (!session.isAdmin) {
+            val selfMember = currentMonthMembers.value.firstOrNull {
+                it.memberKey == session.memberKey ||
+                    it.memberEmail.equals(session.email, ignoreCase = true)
+            }
+            BillingReminderNotifier.notifyMemberForCycleIfNeeded(
+                context = appContext,
+                uid = session.uid,
+                month = month,
+                memberStatus = selfMember,
+            )
+        } else if (pendingAccessRequests.value.isNotEmpty()) {
+            BillingReminderNotifier.notifyAdminPendingRequestsIfNeeded(
+                context = appContext,
+                uid = session.uid,
+                pendingCount = pendingAccessRequests.value.size,
+            )
+        }
     }
 
     private suspend fun refreshAllTimeWrapped(months: List<PaymentMonth>) {
@@ -912,8 +1040,45 @@ class AtaPotifyViewModel(
             val res = paymentRepository.removeWhitelistMember(memberKey, whitelist.value)
             _isBusy.value = false
             res.fold(
-                onSuccess = { _snackbarEvents.tryEmit("Removed member from whitelist") },
+                onSuccess = { _snackbarEvents.tryEmit("Removed member from approved roster") },
                 onFailure = { e -> _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to remove member") },
+            )
+        }
+    }
+
+    fun approveAccessRequest(request: AccessRequest) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.approveAccessRequest(
+                request = request,
+                allCurrentWhitelist = whitelist.value,
+                activeMonth = currentMonth.value,
+                activeMonthMembers = currentMonthMembers.value,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _snackbarEvents.tryEmit("Approved ${request.displayName} for AtaPotify")
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to approve request")
+                },
+            )
+        }
+    }
+
+    fun declineAccessRequest(request: AccessRequest) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.declineAccessRequest(request)
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    _snackbarEvents.tryEmit("Declined ${request.displayName}'s request")
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to decline request")
+                },
             )
         }
     }

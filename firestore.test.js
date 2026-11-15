@@ -475,3 +475,74 @@ test("Admin can rewind paid confirmation, delete pending payment, delete slip/mo
   );
 });
 
+test("Approval Mode: verified user creates own pending access_request, cannot self-approve, Admin approves/declines", async () => {
+  await seedMonthAndMembers();
+  const strangerDb = memberContext(STRANGER_UID, STRANGER_EMAIL).firestore();
+  const aliceDb = memberContext(ALICE_UID, ALICE_EMAIL).firestore();
+  const adminDb = adminContext().firestore();
+  const now = new Date();
+
+  // Stranger cannot spoof status = approved on creation
+  await assertFails(
+    strangerDb.collection("access_requests").doc(STRANGER_UID).set({
+      uid: STRANGER_UID,
+      memberKey: "stranger_key",
+      email: STRANGER_EMAIL,
+      displayName: "Stranger",
+      phone: "",
+      spotifyEmail: "",
+      status: "approved",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Stranger creates pending request
+  await assertSucceeds(
+    strangerDb.collection("access_requests").doc(STRANGER_UID).set({
+      uid: STRANGER_UID,
+      memberKey: "stranger_key",
+      email: STRANGER_EMAIL,
+      displayName: "Stranger",
+      phone: "",
+      spotifyEmail: "",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Stranger can update own details while keeping status = pending
+  await assertSucceeds(
+    strangerDb.collection("access_requests").doc(STRANGER_UID).update({
+      displayName: "Stranger Friend",
+      phone: "94775556666",
+      spotifyEmail: "stranger.music@gmail.com",
+      status: "pending",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Stranger cannot self-approve on update
+  await assertFails(
+    strangerDb.collection("access_requests").doc(STRANGER_UID).update({
+      status: "approved",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Alice cannot read or modify Stranger's request
+  await assertFails(aliceDb.collection("access_requests").doc(STRANGER_UID).get());
+  await assertFails(aliceDb.collection("access_requests").get());
+
+  // Admin can list and approve Stranger's request
+  await assertSucceeds(adminDb.collection("access_requests").where("status", "==", "pending").get());
+  await assertSucceeds(
+    adminDb.collection("access_requests").doc(STRANGER_UID).update({
+      status: "approved",
+      updatedAt: new Date(),
+    })
+  );
+});
+
+

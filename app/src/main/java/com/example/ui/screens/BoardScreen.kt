@@ -4,6 +4,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +83,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -267,7 +275,7 @@ fun BoardScreen(
             }
 
             if (currentMonth == null) {
-                item {
+                item(key = "empty_board") {
                     EmptyBoardState(
                         isAdmin = session.isAdmin,
                         onStartNewMonth = onOpenStartMonth,
@@ -275,18 +283,22 @@ fun BoardScreen(
                 }
             } else if (selectedSection == 0) {
                 if (planConfig.hasBankDetails) {
-                    item {
-                        BankTransferDetailsCard(
-                            planConfig = planConfig,
-                            onCopyText = onCopyText,
-                        )
+                    item(key = "bank_details_card") {
+                        Box(modifier = Modifier.animateItem()) {
+                            BankTransferDetailsCard(
+                                planConfig = planConfig,
+                                onCopyText = onCopyText,
+                            )
+                        }
                     }
                 }
 
                 if (session.isAdmin) {
-                    item {
+                    item(key = "payment_logs_header") {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animateItem(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -344,6 +356,7 @@ fun BoardScreen(
                         isAdmin = session.isAdmin,
                         whatsappDigits = phone,
                         isBusy = isBusy,
+                        modifier = Modifier.animateItem(),
                         onUploadSlipClick = {
                             pendingUploadTarget = member
                             photoPickerLauncher.launch(
@@ -360,32 +373,38 @@ fun BoardScreen(
                     )
                 }
             } else {
-                item {
-                    SpotifyConnectCard(
-                        isConfigured = isSpotifyClientConfigured,
-                        isConnected = spotifyConnected,
-                        spotifyName = spotifyName,
-                        isBusy = isBusy,
-                        onConnect = {
-                            if (isSpotifyClientConfigured) onConnectSpotify()
-                            else onShowSpotifySetupHint()
-                        },
-                        onSync = onSyncSpotify,
-                    )
+                item(key = "spotify_connect_card") {
+                    Box(modifier = Modifier.animateItem()) {
+                        SpotifyConnectCard(
+                            isConfigured = isSpotifyClientConfigured,
+                            isConnected = spotifyConnected,
+                            spotifyName = spotifyName,
+                            isBusy = isBusy,
+                            onConnect = {
+                                if (isSpotifyClientConfigured) onConnectSpotify()
+                                else onShowSpotifySetupHint()
+                            },
+                            onSync = onSyncSpotify,
+                        )
+                    }
                 }
 
                 if (leaderboardRoster.isEmpty()) {
-                    item {
-                        EmptyLeaderboardState()
+                    item(key = "empty_leaderboard") {
+                        Box(modifier = Modifier.animateItem()) {
+                            EmptyLeaderboardState()
+                        }
                     }
                 } else {
-                    items(leaderboardRoster.withIndex().toList(), key = { it.value.memberKey }) { (index, stat) ->
+                    val topMinutes = leaderboardRoster.maxOfOrNull { it.minutesListened }?.coerceAtLeast(1L) ?: 1L
+                    items(leaderboardRoster.withIndex().toList(), key = { "lb_${it.value.memberKey}" }) { (index, stat) ->
                         ListeningLeaderboardCard(
                             rank = index + 1,
                             stat = stat,
-                            amountLkr = currentMonth.amountLkr,
+                            maxMinutes = topMinutes,
                             isSelf = stat.memberEmail.equals(session.email, ignoreCase = true),
                             isAdminEntry = stat.memberEmail.equals(AtaPotifyConstants.ADMIN_EMAIL, ignoreCase = true),
+                            modifier = Modifier.animateItem(),
                         )
                     }
                 }
@@ -468,13 +487,33 @@ private fun MonthHeroCard(
                 }
 
                 if (month != null) {
+                    val animatedProgress by animateFloatAsState(
+                        targetValue = summary.collectionFraction.coerceIn(0f, 1f),
+                        animationSpec = tween(durationMillis = 700, easing = FastOutSlowInEasing),
+                        label = "hero_collection_progress",
+                    )
+                    val animatedPaid by animateIntAsState(
+                        targetValue = summary.paidCount,
+                        animationSpec = tween(durationMillis = 450),
+                        label = "hero_paid_count",
+                    )
+                    val animatedVerifying by animateIntAsState(
+                        targetValue = summary.verifyingCount,
+                        animationSpec = tween(durationMillis = 450),
+                        label = "hero_verifying_count",
+                    )
+                    val animatedPending by animateIntAsState(
+                        targetValue = summary.pendingCount,
+                        animationSpec = tween(durationMillis = 450),
+                        label = "hero_pending_count",
+                    )
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(
-                                text = "${summary.paidCount} of ${summary.totalCount} Paid",
+                                text = "$animatedPaid of ${summary.totalCount} Paid",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
@@ -485,7 +524,7 @@ private fun MonthHeroCard(
                             )
                         }
                         LinearProgressIndicator(
-                            progress = { summary.collectionFraction },
+                            progress = { animatedProgress },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(8.dp)
@@ -494,9 +533,9 @@ private fun MonthHeroCard(
                             trackColor = SurfaceHighest,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            MiniCounterChip("Paid: ${summary.paidCount}", SpotifyEmerald, EmeraldContainer)
-                            MiniCounterChip("Verifying: ${summary.verifyingCount}", AmberWarning, AmberContainer)
-                            MiniCounterChip("Pending: ${summary.pendingCount}", CoralPending, CoralContainer)
+                            MiniCounterChip("Paid: $animatedPaid", SpotifyEmerald, EmeraldContainer)
+                            MiniCounterChip("Verifying: $animatedVerifying", AmberWarning, AmberContainer)
+                            MiniCounterChip("Pending: $animatedPending", CoralPending, CoralContainer)
                         }
                     }
                 }
@@ -768,9 +807,21 @@ internal fun MonthlyBillingSummaryCard(
             }
 
             if (summary.expectedTotalLkr > 0L) {
-                val paidWeight = summary.collectedLkr.toFloat() / summary.expectedTotalLkr.toFloat()
-                val verifyingWeight = summary.verifyingLkr.toFloat() / summary.expectedTotalLkr.toFloat()
-                val pendingWeight = summary.pendingOnlyLkr.toFloat() / summary.expectedTotalLkr.toFloat()
+                val paidWeight by animateFloatAsState(
+                    targetValue = (summary.collectedLkr.toFloat() / summary.expectedTotalLkr.toFloat()).coerceIn(0f, 1f),
+                    animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+                    label = "summary_paid_weight",
+                )
+                val verifyingWeight by animateFloatAsState(
+                    targetValue = (summary.verifyingLkr.toFloat() / summary.expectedTotalLkr.toFloat()).coerceIn(0f, 1f),
+                    animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+                    label = "summary_verifying_weight",
+                )
+                val pendingWeight by animateFloatAsState(
+                    targetValue = (summary.pendingOnlyLkr.toFloat() / summary.expectedTotalLkr.toFloat()).coerceIn(0f, 1f),
+                    animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+                    label = "summary_pending_weight",
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -779,7 +830,7 @@ internal fun MonthlyBillingSummaryCard(
                         .background(SurfaceHighest),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    if (paidWeight > 0f) {
+                    if (paidWeight > 0.005f) {
                         Box(
                             modifier = Modifier
                                 .weight(paidWeight)
@@ -787,7 +838,7 @@ internal fun MonthlyBillingSummaryCard(
                                 .background(SpotifyEmerald),
                         )
                     }
-                    if (verifyingWeight > 0f) {
+                    if (verifyingWeight > 0.005f) {
                         Box(
                             modifier = Modifier
                                 .weight(verifyingWeight)
@@ -795,7 +846,7 @@ internal fun MonthlyBillingSummaryCard(
                                 .background(AmberWarning),
                         )
                     }
-                    if (pendingWeight > 0f) {
+                    if (pendingWeight > 0.005f) {
                         Box(
                             modifier = Modifier
                                 .weight(pendingWeight)
@@ -1202,6 +1253,7 @@ fun MemberPaymentCard(
     isAdmin: Boolean,
     whatsappDigits: String,
     isBusy: Boolean,
+    modifier: Modifier = Modifier,
     onUploadSlipClick: () -> Unit,
     onViewSlipClick: () -> Unit,
     onMarkPaidClick: () -> Unit,
@@ -1216,7 +1268,7 @@ fun MemberPaymentCard(
     var showAdminMenu by remember { mutableStateOf(false) }
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .testTag("member_card_${member.memberKey}"),
         colors = CardDefaults.cardColors(
@@ -1556,7 +1608,7 @@ fun MemberPaymentCard(
 
 @Composable
 fun StatusPill(status: String) {
-    val (label, fg, bg, icon) = when (status) {
+    val (label, targetFg, targetBg, icon) = when (status) {
         AtaPotifyConstants.STATUS_PAID -> Quad(
             stringResource(R.string.status_paid),
             SpotifyEmerald,
@@ -1577,9 +1629,29 @@ fun StatusPill(status: String) {
         )
     }
 
+    val fg by animateColorAsState(
+        targetValue = targetFg,
+        animationSpec = tween(durationMillis = 320),
+        label = "pill_fg",
+    )
+    val bg by animateColorAsState(
+        targetValue = targetBg,
+        animationSpec = tween(durationMillis = 320),
+        label = "pill_bg",
+    )
+    val bounceScale by animateFloatAsState(
+        targetValue = if (status == AtaPotifyConstants.STATUS_PAID) 1.04f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow,
+        ),
+        label = "pill_scale",
+    )
+
     Surface(
         color = bg,
         shape = RoundedCornerShape(999.dp),
+        modifier = Modifier.scale(bounceScale),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1729,16 +1801,30 @@ internal fun buildLeaderboardRoster(
 fun ListeningLeaderboardCard(
     rank: Int,
     stat: ListeningStat,
-    amountLkr: Long,
+    maxMinutes: Long = 1L,
     isSelf: Boolean,
     isAdminEntry: Boolean = false,
+    modifier: Modifier = Modifier,
 ) {
-    val hours = stat.minutesListened / 60.0
-    val costPerHour = if (hours >= 0.1) (amountLkr / hours).toInt() else null
     val hasSynced = stat.syncedAt != null || stat.minutesListened > 0L || stat.tracksCounted > 0L
+    val animatedMinutes by animateIntAsState(
+        targetValue = stat.minutesListened.toInt(),
+        animationSpec = tween(durationMillis = 550),
+        label = "lb_minutes_${stat.memberKey}",
+    )
+    val targetFraction = if (hasSynced && maxMinutes > 0L) {
+        (stat.minutesListened.toFloat() / maxMinutes.toFloat()).coerceIn(0.06f, 1f)
+    } else {
+        0f
+    }
+    val animatedBarFraction by animateFloatAsState(
+        targetValue = targetFraction,
+        animationSpec = tween(durationMillis = 700, easing = FastOutSlowInEasing),
+        label = "lb_bar_${stat.memberKey}",
+    )
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = if (isSelf) SurfaceElevated else SurfaceDark),
         border = BorderStroke(
             1.dp,
@@ -1750,94 +1836,107 @@ fun ListeningLeaderboardCard(
         ),
         shape = RoundedCornerShape(16.dp),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(if (rank == 1 && hasSynced) EmeraldContainer else SurfaceHighest),
-                contentAlignment = Alignment.Center,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    text = "#$rank",
-                    style = MonoNumericSmall,
-                    color = if (rank == 1 && hasSynced) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(if (rank == 1 && hasSynced) EmeraldContainer else SurfaceHighest),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = stat.displayName + if (isSelf) " (You)" else "",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        text = "#$rank",
+                        style = MonoNumericSmall,
+                        color = if (rank == 1 && hasSynced) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold,
                     )
-                    if (isAdminEntry) {
-                        Surface(
-                            color = EmeraldContainer,
-                            shape = RoundedCornerShape(6.dp),
-                        ) {
-                            Text(
-                                text = "Admin",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = SpotifyEmerald,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = stat.displayName + if (isSelf) " (You)" else "",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (isAdminEntry) {
+                            Surface(
+                                color = EmeraldContainer,
+                                shape = RoundedCornerShape(6.dp),
+                            ) {
+                                Text(
+                                    text = "Admin",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SpotifyEmerald,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
                         }
                     }
+                    if (stat.topArtist.isNotBlank()) {
+                        Text(
+                            text = "Top artist: ${stat.topArtist}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else if (!hasSynced) {
+                        Text(
+                            text = if (isSelf) "Tap Connect / Sync Spotify above" else "Waiting for Spotify sync",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted,
+                        )
+                    }
+                    if (stat.topTrack.isNotBlank()) {
+                        Text(
+                            text = "On repeat: ${stat.topTrack}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
-                if (stat.topArtist.isNotBlank()) {
+
+                Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "Top artist: ${stat.topArtist}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        text = "$animatedMinutes min",
+                        style = MonoNumericLarge.copy(fontSize = 18.sp),
+                        color = if (hasSynced) SpotifyEmerald else TextSecondary,
                     )
-                } else if (!hasSynced) {
                     Text(
-                        text = if (isSelf) "Tap Connect / Sync Spotify above" else "Waiting for Spotify sync",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted,
-                    )
-                }
-                if (stat.topTrack.isNotBlank()) {
-                    Text(
-                        text = "On repeat: ${stat.topTrack}",
+                        text = if (hasSynced) "${stat.tracksCounted} tracks" else "Not synced",
                         style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        color = TextSecondary,
                     )
                 }
             }
 
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = "${stat.minutesListened} min",
-                    style = MonoNumericLarge.copy(fontSize = 18.sp),
-                    color = if (hasSynced) SpotifyEmerald else TextSecondary,
-                )
-                Text(
-                    text = when {
-                        costPerHour != null -> "LKR $costPerHour/hr"
-                        hasSynced -> "${stat.tracksCounted} tracks"
-                        else -> "Not synced"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary,
+            if (hasSynced) {
+                LinearProgressIndicator(
+                    progress = { animatedBarFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(CircleShape),
+                    color = if (rank == 1) SpotifyEmerald else SpotifyEmerald.copy(alpha = 0.65f),
+                    trackColor = SurfaceHighest,
                 )
             }
         }
@@ -1875,7 +1974,7 @@ private fun EmptyBoardState(
             )
             Text(
                 text = if (isAdmin) {
-                    "Add your friends in the Admin tab, then tap Start New Month to generate the first board."
+                    "Approve or add friends in the Admin tab, then tap Start New Month to generate the first board."
                 } else {
                     "Waiting for the plan admin to start this month's Spotify Family billing cycle."
                 },
@@ -1925,7 +2024,7 @@ private fun EmptyLeaderboardState() {
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "Connect Spotify above and tap Sync Stats to rank who is getting the best value out of their LKR share.",
+                text = "Connect Spotify above and tap Sync Stats to track who listens the most this month.",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary,
             )

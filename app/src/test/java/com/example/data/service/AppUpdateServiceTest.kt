@@ -12,6 +12,7 @@ class AppUpdateServiceTest {
         assertTrue(AppUpdateService.isRemoteVersionNewer("v1.0.1", "1.0"))
         assertTrue(AppUpdateService.isRemoteVersionNewer("v1.1.0", "1.0.9"))
         assertTrue(AppUpdateService.isRemoteVersionNewer("v1.2", "1.1"))
+        assertTrue(AppUpdateService.isRemoteVersionNewer("v1.3.5", "1.3"))
         assertTrue(AppUpdateService.isRemoteVersionNewer("2.0", "1.9.9"))
         assertTrue(AppUpdateService.isRemoteVersionNewer("V1.2.0", "1.1"))
     }

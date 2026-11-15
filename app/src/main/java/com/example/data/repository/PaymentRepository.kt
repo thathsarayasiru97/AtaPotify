@@ -5,6 +5,7 @@ import com.example.R
 import com.example.data.error.OperationType
 import com.example.data.error.handleFirestoreError
 import com.example.data.error.unwrapFirestoreException
+import com.example.data.model.AccessRequest
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
@@ -87,6 +88,25 @@ class PaymentRepository(
             .map { snapshot ->
                 snapshot.toObjects(WhitelistMember::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
                     .sortedBy { it.displayName.lowercase() }
+            }
+            .catch { error ->
+                val firestoreError = error.unwrapFirestoreException()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path, auth)
+                }
+                throw error
+            }
+    }
+
+    fun observePendingAccessRequests(): Flow<List<AccessRequest>> {
+        val path = "access_requests"
+        return db.collection(path)
+            .whereEqualTo("status", AtaPotifyConstants.STATUS_PENDING)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(AccessRequest::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.createdAt?.toDate()?.time ?: 0L }
             }
             .catch { error ->
                 val firestoreError = error.unwrapFirestoreException()
@@ -1059,6 +1079,183 @@ class PaymentRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, whitelistRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun approveAccessRequest(
+        request: AccessRequest,
+        allCurrentWhitelist: List<WhitelistMember>,
+        activeMonth: PaymentMonth?,
+        activeMonthMembers: List<MemberPaymentStatus>,
+    ): Result<Unit> {
+        requireUserId()
+        val emailLower = AtaPotifyConstants.normalizeEmail(request.email)
+        val memberKey = request.memberKey.ifBlank { AtaPotifyConstants.memberKeyForEmail(emailLower) }
+        val cleanName = request.displayName.trim().ifBlank { emailLower.substringBefore("@") }.take(60)
+        val cleanPhone = AtaPotifyConstants.sanitizeWhatsAppDigits(request.phone).take(24)
+        val cleanSpotifyEmail = AtaPotifyConstants.normalizeEmail(request.spotifyEmail).take(160)
+
+        val whitelistRef = db.collection("whitelist").document(memberKey)
+        val existingWhitelistDoc = try {
+            whitelistRef.get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, whitelistRef.path, auth)
+            null
+        }
+
+        val updatedActiveEmails = (allCurrentWhitelist
+            .filter { it.active && it.memberKey != memberKey }
+            .map { AtaPotifyConstants.normalizeEmail(it.email) } + emailLower)
+            .distinct()
+            .take(25)
+
+        val batch = db.batch()
+        if (existingWhitelistDoc != null && existingWhitelistDoc.exists()) {
+            val updates = mutableMapOf<String, Any>(
+                "displayName" to cleanName,
+                "phone" to cleanPhone,
+                "active" to true,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+            if (cleanSpotifyEmail.isNotBlank()) {
+                updates["spotifyEmail"] = cleanSpotifyEmail
+            }
+            batch.update(whitelistRef, updates)
+        } else {
+            batch.set(
+                whitelistRef,
+                mapOf(
+                    "memberKey" to memberKey,
+                    "email" to emailLower,
+                    "displayName" to cleanName,
+                    "phone" to cleanPhone,
+                    "spotifyEmail" to cleanSpotifyEmail,
+                    "role" to AtaPotifyConstants.ROLE_MEMBER,
+                    "active" to true,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        }
+
+        val reqUid = request.uid.ifBlank { request.id }
+        if (reqUid.isNotBlank()) {
+            batch.update(
+                db.collection("access_requests").document(reqUid),
+                mapOf(
+                    "status" to "approved",
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        }
+
+        val configRef = db.collection("plan_config").document(AtaPotifyConstants.PLAN_CONFIG_DOC_ID)
+        val configExists = try {
+            configRef.get().await().exists()
+        } catch (e: Exception) {
+            false
+        }
+        if (configExists) {
+            batch.update(
+                configRef,
+                mapOf(
+                    "allowedEmails" to updatedActiveEmails,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        } else {
+            batch.set(
+                configRef,
+                mapOf(
+                    "planName" to AtaPotifyConstants.DEFAULT_PLAN_NAME,
+                    "monthlyAmountLkr" to AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
+                    "currency" to AtaPotifyConstants.CURRENCY_LKR,
+                    "allowedEmails" to updatedActiveEmails,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        }
+
+        if (activeMonth != null) {
+            val monthRef = db.collection("payments").document(activeMonth.monthId)
+            val mergedMonthEmails = (activeMonth.allowedEmails + updatedActiveEmails).distinct().take(25)
+            batch.update(
+                monthRef,
+                mapOf(
+                    "allowedEmails" to mergedMonthEmails,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+            val existingMemberEntry = activeMonthMembers.firstOrNull { it.memberKey == memberKey }
+            if (existingMemberEntry != null) {
+                batch.update(
+                    monthRef.collection("members").document(memberKey),
+                    mapOf(
+                        "displayName" to cleanName,
+                        "allowedEmails" to mergedMonthEmails,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+            } else {
+                batch.set(
+                    monthRef.collection("members").document(memberKey),
+                    mapOf(
+                        "memberKey" to memberKey,
+                        "memberEmail" to emailLower,
+                        "displayName" to cleanName,
+                        "status" to AtaPotifyConstants.STATUS_PENDING,
+                        "amountLkr" to activeMonth.amountLkr,
+                        "hasReceipt" to false,
+                        "allowedEmails" to mergedMonthEmails,
+                        "reminderCount" to 0L,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+            }
+            for (other in activeMonthMembers) {
+                if (other.memberKey != memberKey) {
+                    batch.update(
+                        monthRef.collection("members").document(other.memberKey),
+                        mapOf(
+                            "allowedEmails" to mergedMonthEmails,
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
+                    )
+                }
+            }
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, whitelistRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun declineAccessRequest(request: AccessRequest): Result<Unit> {
+        requireUserId()
+        val reqUid = request.uid.ifBlank { request.id }
+        val reqRef = db.collection("access_requests").document(reqUid)
+        return try {
+            reqRef.update(
+                mapOf(
+                    "status" to "rejected",
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, reqRef.path, auth)
             Result.failure(e)
         }
     }

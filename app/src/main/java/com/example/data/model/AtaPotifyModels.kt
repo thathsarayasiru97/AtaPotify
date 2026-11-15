@@ -192,6 +192,20 @@ data class ReceiptSlip(
 )
 
 @IgnoreExtraProperties
+data class AccessRequest(
+    @DocumentId val id: String = "",
+    val uid: String = "",
+    val memberKey: String = "",
+    val email: String = "",
+    val displayName: String = "",
+    val phone: String = "",
+    val spotifyEmail: String = "",
+    val status: String = AtaPotifyConstants.STATUS_PENDING,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+)
+
+@IgnoreExtraProperties
 data class ListeningStat(
     @DocumentId val id: String = "",
     val memberKey: String = "",
@@ -278,20 +292,13 @@ data class AllTimeMemberStanding(
     val totalTracks: Long,
     val totalLkrAllocated: Long,
     val favoriteArtist: String,
-) {
-    val lkrPerHour: Int?
-        get() {
-            val hours = totalMinutes / 60.0
-            return if (hours >= 0.1 && totalLkrAllocated > 0L) (totalLkrAllocated / hours).toInt() else null
-        }
-}
+)
 
 data class AllTimeWrappedSummary(
     val monthsTracked: Int,
     val totalGroupMinutes: Long,
     val totalGroupTracks: Long,
     val topListener: AllTimeMemberStanding?,
-    val bestValueMember: AllTimeMemberStanding?,
     val topArtists: List<String>,
     val standings: List<AllTimeMemberStanding>,
 )
@@ -346,9 +353,6 @@ fun calculateAllTimeWrappedSummary(
     if (standings.isEmpty()) return null
 
     val topListener = standings.firstOrNull { it.totalMinutes > 0L }
-    val bestValue = standings
-        .filter { it.lkrPerHour != null }
-        .minByOrNull { it.lkrPerHour ?: Int.MAX_VALUE }
     val topArtists = globalArtists.entries
         .sortedByDescending { it.value }
         .map { it.key }
@@ -359,7 +363,6 @@ fun calculateAllTimeWrappedSummary(
         totalGroupMinutes = standings.sumOf { it.totalMinutes },
         totalGroupTracks = standings.sumOf { it.totalTracks },
         topListener = topListener,
-        bestValueMember = bestValue,
         topArtists = topArtists,
         standings = standings,
     )
@@ -390,12 +393,11 @@ fun buildWhatsAppMonthlySummaryText(
         val activeStats = stats.filter { it.minutesListened > 0L }.sortedByDescending { it.minutesListened }
         if (activeStats.isNotEmpty()) {
             appendLine()
-            appendLine("*Spotify Value Leaderboard:*")
+            appendLine("*Spotify Listening Leaderboard:*")
             activeStats.take(5).forEachIndexed { idx, s ->
-                val hrs = s.minutesListened / 60.0
-                val rate = if (hrs >= 0.1) " (LKR ${(month.amountLkr / hrs).toInt()}/hr)" else ""
                 val artist = if (s.topArtist.isNotBlank()) " • ${s.topArtist}" else ""
-                appendLine("#${idx + 1} ${s.displayName}: ${s.minutesListened} min$rate$artist")
+                val tracks = if (s.tracksCounted > 0L) " (${s.tracksCounted} tracks)" else ""
+                appendLine("#${idx + 1} ${s.displayName}: ${s.minutesListened} min$tracks$artist")
             }
         }
         if (planConfig.hasBankDetails && summary.pendingCount > 0) {

@@ -1,8 +1,5 @@
-### What's New in v1.3
-- **Cleaner Dashboard**: Moved the Monthly Billing Summary card to the **History** tab to keep the main Board focused.
-- **Spotify Email Onboarding & Admin Reporting**: Prompts members on initial login for the email assigned to their Spotify account and displays it in the Admin panel with one-tap copy.
-- **Bank Transfer Details Card**: Friends can view and copy the Admin's bank account details in one tap from the Board.
-- **Streamlined Member Cards**: Grouped secondary Admin actions (`Edit Log`, `Remove`, `Rewind Paid`, `Advance Pay`) into a compact `⋮` menu.
-- **Multi-Month Advance Pay**: Admin can mark a friend as paid across multiple consecutive future months at once.
-- **Share to WhatsApp**: Share a formatted monthly payment & Spotify Leaderboard summary directly to WhatsApp.
-- **All-Time AtaPotify Wrapped**: View cumulative group listening minutes, top all-time listener, best `LKR/hr` value, and favorite artists in the History tab.
+### What's New in v1.3.5
+- **Approval Mode Onboarding**: Anyone can install and sign in with Google; join requests go straight to the Admin panel while members see an auto-unlocking **Awaiting for Approval** screen.
+- **Billing Cycle Notification Reminders**: Automatic Android notifications alert members when a new billing cycle begins and their payment is pending (and notify Admin on new join requests).
+- **Leaderboard Cleanup**: Removed `LKR/hr` value metrics from the leaderboard and All-Time Wrapped card in favor of clean relative listening progress bars.
+- **Rich UI Animations**: Added smooth tab & auth transitions, animated progress bars and counters, pulsing approval radar rings, and animated list items.

@@ -1,15 +1,26 @@
 package com.example
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -90,6 +101,8 @@ import com.example.data.repository.AuthRepository
 import com.example.data.repository.PaymentRepository
 import com.example.data.repository.authStateFlow
 import com.example.data.service.SpotifyStatsService
+import com.example.data.worker.BillingReminderNotifier
+import com.example.data.worker.BillingReminderScheduler
 import com.example.data.worker.SpotifySyncScheduler
 import com.example.ui.screens.AccessDeniedScreen
 import com.example.ui.screens.AddMemberToMonthDialog
@@ -97,6 +110,7 @@ import com.example.ui.screens.AdminScreen
 import com.example.ui.screens.AdvancePaymentDialog
 import com.example.ui.screens.AppUpdateAvailableDialog
 import com.example.ui.screens.AutoReminderQueueSheet
+import com.example.ui.screens.AwaitingApprovalScreen
 import com.example.ui.screens.BoardScreen
 import com.example.ui.screens.ConfirmDeleteDialog
 import com.example.ui.screens.EditPaymentDialog
@@ -172,24 +186,32 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val user = currentUser
-                if (user == null) {
-                    SignInScreen(
-                        onAuthSuccess = {},
-                    )
-                } else {
-                    AuthGatedHost(
-                        firebaseUser = user,
-                        pendingSpotifyUri = pendingCallbackUri,
-                        onConsumeSpotifyUri = { pendingSpotifyCallback.value = null },
-                        onSignOut = {
-                            SpotifySyncScheduler.cancelPeriodicSync(context)
-                            signOutFromApp(
-                                credentialManager = credentialManager,
-                                scope = scope,
-                            )
-                        },
-                    )
+                AnimatedContent(
+                    targetState = currentUser,
+                    transitionSpec = {
+                        fadeIn(tween(350)) togetherWith fadeOut(tween(250))
+                    },
+                    label = "root_auth_transition",
+                ) { user ->
+                    if (user == null) {
+                        SignInScreen(
+                            onAuthSuccess = {},
+                        )
+                    } else {
+                        AuthGatedHost(
+                            firebaseUser = user,
+                            pendingSpotifyUri = pendingCallbackUri,
+                            onConsumeSpotifyUri = { pendingSpotifyCallback.value = null },
+                            onSignOut = {
+                                SpotifySyncScheduler.cancelPeriodicSync(context)
+                                BillingReminderScheduler.cancelPeriodicChecks(context)
+                                signOutFromApp(
+                                    credentialManager = credentialManager,
+                                    scope = scope,
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -248,44 +270,66 @@ private fun AuthGatedHost(
 
     val gateState by gateViewModel.authGateState.collectAsStateWithLifecycle()
 
-    when (val state = gateState) {
-        AuthGateUiState.CheckingAccess -> {
-            LoadingGateScreen(message = "Verifying family plan access...")
-        }
+    AnimatedContent(
+        targetState = gateState,
+        transitionSpec = {
+            fadeIn(tween(320)) togetherWith fadeOut(tween(220))
+        },
+        contentKey = { it::class },
+        label = "auth_gate_transition",
+    ) { state ->
+        when (state) {
+            AuthGateUiState.CheckingAccess -> {
+                LoadingGateScreen(message = "Verifying family plan access...")
+            }
 
-        is AuthGateUiState.Denied -> {
-            AccessDeniedScreen(
-                email = state.email,
-                errorMessage = state.errorMessage,
-                onRetry = { gateViewModel.verifyAccess() },
-                onSignOut = onSignOut,
-            )
-        }
+            is AuthGateUiState.AwaitingApproval -> {
+                AwaitingApprovalScreen(
+                    info = state.info,
+                    isSavingDetails = state.isSavingDetails,
+                    infoMessage = state.infoMessage,
+                    onSaveDetails = { name, phone, spotifyEmail ->
+                        gateViewModel.updatePendingDetails(name, phone, spotifyEmail)
+                    },
+                    onRetry = { gateViewModel.verifyAccess() },
+                    onSignOut = onSignOut,
+                )
+            }
 
-        is AuthGateUiState.Authorized -> {
-            val mainViewModel: AtaPotifyViewModel = viewModel(
-                key = "main_${state.session.uid}_${state.session.isAdmin}",
-                factory = object : ViewModelProvider.Factory {
-                    @Suppress("UNCHECKED_CAST")
-                    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                        return AtaPotifyViewModel(
-                            appContext = appContext,
-                            authRepository = authRepository,
-                            paymentRepository = paymentRepository,
-                            spotifyService = spotifyService,
-                            session = state.session,
-                        ) as T
-                    }
-                },
-            )
+            is AuthGateUiState.Denied -> {
+                AccessDeniedScreen(
+                    email = state.email,
+                    errorMessage = state.errorMessage,
+                    onRetry = { gateViewModel.verifyAccess() },
+                    onSignOut = onSignOut,
+                )
+            }
 
-            MainAppScaffold(
-                session = state.session,
-                viewModel = mainViewModel,
-                pendingSpotifyUri = pendingSpotifyUri,
-                onConsumeSpotifyUri = onConsumeSpotifyUri,
-                onSignOut = onSignOut,
-            )
+            is AuthGateUiState.Authorized -> {
+                val mainViewModel: AtaPotifyViewModel = viewModel(
+                    key = "main_${state.session.uid}_${state.session.isAdmin}",
+                    factory = object : ViewModelProvider.Factory {
+                        @Suppress("UNCHECKED_CAST")
+                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                            return AtaPotifyViewModel(
+                                appContext = appContext,
+                                authRepository = authRepository,
+                                paymentRepository = paymentRepository,
+                                spotifyService = spotifyService,
+                                session = state.session,
+                            ) as T
+                        }
+                    },
+                )
+
+                MainAppScaffold(
+                    session = state.session,
+                    viewModel = mainViewModel,
+                    pendingSpotifyUri = pendingSpotifyUri,
+                    onConsumeSpotifyUri = onConsumeSpotifyUri,
+                    onSignOut = onSignOut,
+                )
+            }
         }
     }
 }
@@ -305,6 +349,7 @@ private fun MainAppScaffold(
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val planConfig by viewModel.planConfig.collectAsStateWithLifecycle()
     val whitelist by viewModel.whitelist.collectAsStateWithLifecycle()
+    val pendingAccessRequests by viewModel.pendingAccessRequests.collectAsStateWithLifecycle()
     val paymentMonths by viewModel.paymentMonths.collectAsStateWithLifecycle()
     val currentMonth by viewModel.currentMonth.collectAsStateWithLifecycle()
     val selectedHistoryMonth by viewModel.selectedHistoryMonth.collectAsStateWithLifecycle()
@@ -323,6 +368,9 @@ private fun MainAppScaffold(
     val allTimeWrapped by viewModel.allTimeWrapped.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.BOARD) }
+    var notificationsEnabled by remember {
+        mutableStateOf(BillingReminderNotifier.hasNotificationPermission(context))
+    }
     var showProfileSheet by remember { mutableStateOf(false) }
     var showStartMonthDialog by remember { mutableStateOf(false) }
     var showSpotifyHintDialog by remember { mutableStateOf(false) }
@@ -333,6 +381,28 @@ private fun MainAppScaffold(
     var deletingPaymentContext by remember { mutableStateOf<Triple<PaymentMonth, MemberPaymentStatus, List<MemberPaymentStatus>>?>(null) }
     var addMemberTargetContext by remember { mutableStateOf<Pair<PaymentMonth, List<MemberPaymentStatus>>?>(null) }
     var deletingMonthContext by remember { mutableStateOf<Triple<PaymentMonth, List<MemberPaymentStatus>, List<ListeningStat>>?>(null) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notificationsEnabled = granted || BillingReminderNotifier.hasNotificationPermission(context)
+        if (granted) {
+            viewModel.notifyRemindersPermissionGranted()
+            viewModel.emitSnackbar("Billing cycle reminders enabled")
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !BillingReminderNotifier.hasNotificationPermission(context)
+        ) {
+            val prefs = context.getSharedPreferences("atapotify_ui_prefs", Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("asked_post_notifications", false)) {
+                prefs.edit().putBoolean("asked_post_notifications", true).apply()
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     val copyToClipboard: (String, String) -> Unit = remember(context, viewModel) {
         { label, text ->
@@ -346,6 +416,7 @@ private fun MainAppScaffold(
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsEnabled = BillingReminderNotifier.hasNotificationPermission(context)
                 viewModel.autoSyncSpotifyOnResume()
             }
         }
@@ -490,14 +561,30 @@ private fun MainAppScaffold(
                     ) {
                         tabs.forEach { tab ->
                             val selected = selectedTab == tab
+                            val badgeCount = if (tab == AppTab.ADMIN) pendingAccessRequests.size else 0
                             NavigationBarItem(
                                 selected = selected,
                                 onClick = { selectedTab = tab },
                                 icon = {
-                                    Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = stringResource(tab.labelRes),
-                                    )
+                                    if (badgeCount > 0) {
+                                        BadgedBox(
+                                            badge = {
+                                                Badge(containerColor = AmberWarning, contentColor = ObsidianBg) {
+                                                    Text(badgeCount.toString())
+                                                }
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = tab.icon,
+                                                contentDescription = stringResource(tab.labelRes),
+                                            )
+                                        }
+                                    } else {
+                                        Icon(
+                                            imageVector = tab.icon,
+                                            contentDescription = stringResource(tab.labelRes),
+                                        )
+                                    }
                                 },
                                 label = { Text(stringResource(tab.labelRes)) },
                                 modifier = Modifier.testTag("nav_${tab.routeId}"),
@@ -527,14 +614,30 @@ private fun MainAppScaffold(
                         Spacer(Modifier.size(12.dp))
                         tabs.forEach { tab ->
                             val selected = selectedTab == tab
+                            val badgeCount = if (tab == AppTab.ADMIN) pendingAccessRequests.size else 0
                             NavigationRailItem(
                                 selected = selected,
                                 onClick = { selectedTab = tab },
                                 icon = {
-                                    Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = stringResource(tab.labelRes),
-                                    )
+                                    if (badgeCount > 0) {
+                                        BadgedBox(
+                                            badge = {
+                                                Badge(containerColor = AmberWarning, contentColor = ObsidianBg) {
+                                                    Text(badgeCount.toString())
+                                                }
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = tab.icon,
+                                                contentDescription = stringResource(tab.labelRes),
+                                            )
+                                        }
+                                    } else {
+                                        Icon(
+                                            imageVector = tab.icon,
+                                            contentDescription = stringResource(tab.labelRes),
+                                        )
+                                    }
                                 },
                                 label = { Text(stringResource(tab.labelRes)) },
                                 modifier = Modifier.testTag("rail_${tab.routeId}"),
@@ -550,8 +653,17 @@ private fun MainAppScaffold(
                     }
                 }
 
-                Box(modifier = Modifier.weight(1f).fillMaxSize()) {
-                    when (selectedTab) {
+                AnimatedContent(
+                    targetState = selectedTab,
+                    modifier = Modifier.weight(1f).fillMaxSize(),
+                    transitionSpec = {
+                        val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                        (slideInHorizontally(tween(260)) { it / 6 * direction } + fadeIn(tween(260))) togetherWith
+                            (slideOutHorizontally(tween(200)) { -it / 6 * direction } + fadeOut(tween(200)))
+                    },
+                    label = "main_tab_transition",
+                ) { tab ->
+                    when (tab) {
                         AppTab.BOARD -> BoardScreen(
                             session = session,
                             adminDisplayName = adminDisplayName,
@@ -705,7 +817,10 @@ private fun MainAppScaffold(
                             planConfig = planConfig,
                             currentMonth = currentMonth,
                             whitelist = whitelist,
+                            pendingRequests = pendingAccessRequests,
                             isBusy = isBusy,
+                            onApproveRequest = { viewModel.approveAccessRequest(it) },
+                            onDeclineRequest = { viewModel.declineAccessRequest(it) },
                             onSaveLkrRate = { amount, alsoUpdateActive ->
                                 viewModel.updateMonthlyLkrRate(amount, alsoUpdateActive)
                             },
@@ -747,6 +862,12 @@ private fun MainAppScaffold(
             profile = userProfile,
             spotifyConnected = spotifyConnected,
             spotifyName = spotifyName,
+            notificationsEnabled = notificationsEnabled,
+            onEnableNotifications = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
             isBusy = isBusy,
             onSaveProfile = { newName, newPhone, newSpotifyEmail ->
                 viewModel.updateOwnProfile(newName, newPhone, newSpotifyEmail) {

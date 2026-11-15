@@ -99,9 +99,26 @@
       },
       "required": ["memberEmail", "uploadedByUid", "mimeType", "imageBase64", "uploadedAt"]
     },
+    "AccessRequest": {
+      "title": "AccessRequest",
+      "description": "Pending membership approval request submitted automatically when a new user signs in with Google.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID of the requester" },
+        "memberKey": { "type": "string", "description": "Deterministic email-derived key" },
+        "email": { "type": "string", "description": "Verified lowercase Google email" },
+        "displayName": { "type": "string", "description": "Requester display name" },
+        "phone": { "type": "string", "description": "Optional WhatsApp number digits" },
+        "spotifyEmail": { "type": "string", "description": "Optional Spotify account email" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "Approval request state" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
+      },
+      "required": ["uid", "memberKey", "email", "displayName", "status", "createdAt", "updatedAt"]
+    },
     "ListeningStat": {
       "title": "ListeningStat",
-      "description": "Monthly Spotify listening summary synced by each connected member for the Value Leaderboard.",
+      "description": "Monthly Spotify listening summary synced by each connected member for the Leaderboard.",
       "type": "object",
       "properties": {
         "memberKey": { "type": "string", "description": "Deterministic member key" },
@@ -123,13 +140,17 @@
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "User profile documents keyed by Firebase UID."
     },
+    "/access_requests/{userId}": {
+      "schema": { "$ref": "#/entities/AccessRequest" },
+      "description": "Membership approval requests keyed by requester Firebase UID."
+    },
     "/plan_config/{configId}": {
       "schema": { "$ref": "#/entities/PlanConfig" },
       "description": "Global family plan settings document (settings)."
     },
     "/whitelist/{memberKey}": {
       "schema": { "$ref": "#/entities/WhitelistMember" },
-      "description": "Whitelisted friends with WhatsApp numbers managed by Admin."
+      "description": "Approved family members with WhatsApp numbers managed by Admin."
     },
     "/payments/{monthId}": {
       "schema": { "$ref": "#/entities/PaymentMonth" },
@@ -145,7 +166,7 @@
     },
     "/payments/{monthId}/stats/{memberKey}": {
       "schema": { "$ref": "#/entities/ListeningStat" },
-      "description": "Peer-visible Spotify listening stats per member for the monthly Value Leaderboard."
+      "description": "Peer-visible Spotify listening stats per member for the monthly Leaderboard."
     }
   }
 }

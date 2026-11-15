@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -287,6 +290,7 @@ fun HistoryScreen(
                             isAdmin = session.isAdmin,
                             whatsappDigits = phone,
                             isBusy = isBusy,
+                            modifier = Modifier.animateItem(),
                             onUploadSlipClick = {},
                             onViewSlipClick = { onViewSlip(member) },
                             onMarkPaidClick = { onConfirmPaid(member) },
@@ -299,12 +303,15 @@ fun HistoryScreen(
                     }
 
                     if (leaderboardRoster.isNotEmpty()) {
+                        val topHistMinutes = leaderboardRoster.maxOfOrNull { it.minutesListened }?.coerceAtLeast(1L) ?: 1L
                         item {
                             Text(
                                 text = "Leaderboard (${selectedMonth.displayLabel})",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.padding(top = 6.dp),
+                                modifier = Modifier
+                                    .padding(top = 6.dp)
+                                    .animateItem(),
                             )
                         }
                         items(
@@ -314,9 +321,10 @@ fun HistoryScreen(
                             ListeningLeaderboardCard(
                                 rank = idx + 1,
                                 stat = stat,
-                                amountLkr = selectedMonth.amountLkr,
+                                maxMinutes = topHistMinutes,
                                 isSelf = stat.memberEmail.equals(session.email, ignoreCase = true),
                                 isAdminEntry = stat.memberEmail.equals(AtaPotifyConstants.ADMIN_EMAIL, ignoreCase = true),
+                                modifier = Modifier.animateItem(),
                             )
                         }
                     }
@@ -331,6 +339,16 @@ fun HistoryScreen(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
+    val animatedMinutes by animateIntAsState(
+        targetValue = summary.totalGroupMinutes.toInt(),
+        animationSpec = tween(durationMillis = 650),
+        label = "wrapped_minutes",
+    )
+    val animatedTracks by animateIntAsState(
+        targetValue = summary.totalGroupTracks.toInt(),
+        animationSpec = tween(durationMillis = 650),
+        label = "wrapped_tracks",
+    )
     val totalHours = remember(summary.totalGroupMinutes) {
         String.format(java.util.Locale.US, "%.1f", summary.totalGroupMinutes / 60.0)
     }
@@ -412,12 +430,12 @@ private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
                                 color = TextSecondary,
                             )
                             Text(
-                                text = "${summary.totalGroupMinutes} min",
+                                text = "$animatedMinutes min",
                                 style = MonoNumericLarge.copy(fontSize = 17.sp),
                                 color = SpotifyEmerald,
                             )
                             Text(
-                                text = "$totalHours hrs • ${summary.totalGroupTracks} tracks",
+                                text = "$totalHours hrs • $animatedTracks tracks",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted,
                             )
@@ -449,10 +467,7 @@ private fun AllTimeWrappedCard(summary: AllTimeWrappedSummary) {
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = buildString {
-                                        append("${top.totalMinutes} min")
-                                        top.lkrPerHour?.let { append(" • LKR $it/hr") }
-                                    },
+                                    text = "${top.totalMinutes} min • ${top.totalTracks} tracks",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = SpotifyEmerald,
                                     maxLines = 1,

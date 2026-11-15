@@ -5,6 +5,7 @@ import com.example.R
 import com.example.data.error.OperationType
 import com.example.data.error.handleFirestoreError
 import com.example.data.error.unwrapFirestoreException
+import com.example.data.model.AccessRequest
 import com.example.data.model.AtaPotifyConstants
 import com.example.data.model.UserProfile
 import com.example.data.model.WhitelistMember
@@ -31,6 +32,16 @@ sealed interface AccessResolution {
         val displayName: String,
         val phone: String,
         val spotifyEmail: String = "",
+    ) : AccessResolution
+
+    data class AwaitingApproval(
+        val uid: String,
+        val email: String,
+        val memberKey: String,
+        val displayName: String,
+        val phone: String = "",
+        val spotifyEmail: String = "",
+        val requestStatus: String = AtaPotifyConstants.STATUS_PENDING,
     ) : AccessResolution
 
     data class Denied(val email: String) : AccessResolution
@@ -88,9 +99,6 @@ class AuthRepository(
                 whitelistEntry = snap.documents
                     .mapNotNull { it.toObject(WhitelistMember::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
                     .firstOrNull { it.active }
-                if (whitelistEntry == null) {
-                    return Result.success(AccessResolution.Denied(emailLower))
-                }
             }
 
             val userPath = "users/${user.uid}"
@@ -135,6 +143,84 @@ class AuthRepository(
                 }
             }
 
+            if (!isAdmin && whitelistEntry == null) {
+                val reqPath = "access_requests/${user.uid}"
+                val reqRef = db.collection("access_requests").document(user.uid)
+                val existingReq = try {
+                    reqRef.get().await()
+                        .toObject(AccessRequest::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    handleFirestoreError(e, OperationType.GET, reqPath, auth)
+                    throw e
+                }
+
+                if (existingReq == null) {
+                    val reqPayload = mapOf(
+                        "uid" to user.uid,
+                        "memberKey" to memberKey,
+                        "email" to emailLower,
+                        "displayName" to resolvedName.take(60),
+                        "phone" to resolvedPhone.take(24),
+                        "spotifyEmail" to resolvedSpotifyEmail.take(160),
+                        "status" to AtaPotifyConstants.STATUS_PENDING,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                    try {
+                        reqRef.set(reqPayload).await()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        handleFirestoreError(e, OperationType.CREATE, reqPath, auth)
+                        throw e
+                    }
+                    return Result.success(
+                        AccessResolution.AwaitingApproval(
+                            uid = user.uid,
+                            email = emailLower,
+                            memberKey = memberKey,
+                            displayName = resolvedName,
+                            phone = resolvedPhone,
+                            spotifyEmail = resolvedSpotifyEmail,
+                            requestStatus = AtaPotifyConstants.STATUS_PENDING,
+                        )
+                    )
+                } else {
+                    // If user had been approved previously and was later paused/removed, re-open a pending request
+                    val effectiveReqStatus = if (existingReq.status == "approved") {
+                        try {
+                            reqRef.update(
+                                mapOf(
+                                    "status" to AtaPotifyConstants.STATUS_PENDING,
+                                    "updatedAt" to FieldValue.serverTimestamp(),
+                                )
+                            ).await()
+                            AtaPotifyConstants.STATUS_PENDING
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            handleFirestoreError(e, OperationType.UPDATE, reqPath, auth)
+                            existingReq.status
+                        }
+                    } else {
+                        existingReq.status
+                    }
+                    return Result.success(
+                        AccessResolution.AwaitingApproval(
+                            uid = user.uid,
+                            email = emailLower,
+                            memberKey = memberKey,
+                            displayName = existingReq.displayName.ifBlank { resolvedName },
+                            phone = existingReq.phone.ifBlank { resolvedPhone },
+                            spotifyEmail = existingReq.spotifyEmail.ifBlank { resolvedSpotifyEmail },
+                            requestStatus = effectiveReqStatus,
+                        )
+                    )
+                }
+            }
+
             Result.success(
                 AccessResolution.Authorized(
                     uid = user.uid,
@@ -149,6 +235,71 @@ class AuthRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun observeOwnWhitelistApproval(emailLower: String): Flow<Boolean> {
+        val normalized = AtaPotifyConstants.normalizeEmail(emailLower)
+        val path = "whitelist"
+        return db.collection(path)
+            .whereEqualTo("email", normalized)
+            .snapshots()
+            .map { snap ->
+                snap.documents
+                    .mapNotNull { it.toObject(WhitelistMember::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                    .any { it.active }
+            }
+            .catch { error ->
+                val fsErr = error.unwrapFirestoreException()
+                if (fsErr == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(fsErr ?: error, OperationType.LIST, path, auth)
+                }
+                emit(false)
+            }
+    }
+
+    suspend fun updatePendingAccessRequestDetails(
+        displayName: String,
+        phone: String,
+        spotifyEmail: String,
+    ): Result<Unit> {
+        val uid = requireUserId()
+        val trimmedName = displayName.trim().take(60)
+        require(trimmedName.isNotEmpty()) { "Display name cannot be blank" }
+        val cleanPhone = AtaPotifyConstants.sanitizeWhatsAppDigits(phone).take(24)
+        val cleanSpotifyEmail = AtaPotifyConstants.normalizeEmail(spotifyEmail).take(160)
+
+        val reqRef = db.collection("access_requests").document(uid)
+        val userRef = db.collection("users").document(uid)
+        val batch = db.batch()
+        batch.update(
+            reqRef,
+            mapOf(
+                "displayName" to trimmedName,
+                "phone" to cleanPhone,
+                "spotifyEmail" to cleanSpotifyEmail,
+                "status" to AtaPotifyConstants.STATUS_PENDING,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        )
+        batch.update(
+            userRef,
+            mapOf(
+                "displayName" to trimmedName,
+                "phone" to cleanPhone,
+                "spotifyEmail" to cleanSpotifyEmail,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+        )
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, reqRef.path, auth)
             Result.failure(e)
         }
     }

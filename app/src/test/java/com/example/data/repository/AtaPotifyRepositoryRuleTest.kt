@@ -240,17 +240,26 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
-    fun unauthorizedUserIsDeniedAndCannotReadMonths() = runBlocking {
+    fun newUserEntersAwaitingApprovalModeAndAdminCanApprove() = runBlocking {
         val strangerEmail = "stranger_${UUID.randomUUID().toString().take(6)}@gmail.com"
         signInTestUser(strangerEmail)
         val authRepo = AuthRepository(firestore, auth)
 
-        val resolution = withTimeout(TIMEOUT_MS) {
+        val resolution = step("new user resolveAccessAndSyncProfile") {
             authRepo.resolveAccessAndSyncProfile(auth.currentUser!!).getOrThrow()
         }
-        assertTrue(resolution is AccessResolution.Denied)
+        assertTrue(resolution is AccessResolution.AwaitingApproval)
 
-        // Unfiltered query without Admin fails with PERMISSION_DENIED
+        // Waiting user can attach WhatsApp & Spotify email for the Admin
+        step("new user updatePendingAccessRequestDetails") {
+            authRepo.updatePendingAccessRequestDetails(
+                displayName = "New Friend",
+                phone = "0775551234",
+                spotifyEmail = "newfriend.spotify@gmail.com",
+            ).getOrThrow()
+        }
+
+        // Unapproved user still cannot read payment months
         val paymentRepo = PaymentRepository(firestore, auth)
         val error = runCatching {
             withTimeout(FLOW_TIMEOUT_MS) {
@@ -262,6 +271,37 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
             "Expected FirebaseFirestoreException, got $error"
         }
         assertEquals(FirebaseFirestoreException.Code.PERMISSION_DENIED, firestoreException.code)
+
+        // Admin observes the pending request and approves it
+        signInTestUser(AtaPotifyConstants.ADMIN_EMAIL)
+        val pendingReq = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observePendingAccessRequests()
+                .first { list -> list.any { it.email == strangerEmail } }
+                .first { it.email == strangerEmail }
+        }
+        assertEquals("New Friend", pendingReq.displayName)
+        assertEquals("newfriend.spotify@gmail.com", pendingReq.spotifyEmail)
+
+        step("admin approveAccessRequest") {
+            paymentRepo.approveAccessRequest(
+                request = pendingReq,
+                allCurrentWhitelist = emptyList(),
+                activeMonth = null,
+                activeMonthMembers = emptyList(),
+            ).getOrThrow()
+        }
+
+        // Stranger now unlocks automatically via whitelist approval observer & resolveAccess
+        signInTestUser(strangerEmail)
+        val approvedSignal = withTimeout(FLOW_TIMEOUT_MS) {
+            authRepo.observeOwnWhitelistApproval(strangerEmail).first { it }
+        }
+        assertTrue(approvedSignal)
+
+        val unlockedResolution = step("approved user resolveAccessAndSyncProfile") {
+            authRepo.resolveAccessAndSyncProfile(auth.currentUser!!).getOrThrow()
+        }
+        assertTrue(unlockedResolution is AccessResolution.Authorized && !unlockedResolution.isAdmin)
     }
 
     @Test
