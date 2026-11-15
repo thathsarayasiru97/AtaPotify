@@ -146,6 +146,7 @@ jobs:
           {
             echo "### Debug Test APK Ready"
             echo "- **Version:** \`${{ needs.check-debug-trigger.outputs.version_name }}\`"
+            echo "- **Package ID:** \`com.aistudio.spotsplit.kvwmpx.debug\` (**AtaPotify Dev**, installs side-by-side with Release)"
             echo "- **Artifact:** \`${{ env.APK_NAME }}\` (zipped under **Artifacts** below)"
             echo "- **Public Releases / In-App Updater:** Not updated"
           } >> "$GITHUB_STEP_SUMMARY"
