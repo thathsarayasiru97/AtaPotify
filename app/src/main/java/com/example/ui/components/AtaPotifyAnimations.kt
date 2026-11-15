@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -239,6 +240,7 @@ fun AnimatedStreakBadge(
 fun FamilyGroupBadge(
     familyGroup: String,
     familyGroups: List<FamilyGroup> = emptyList(),
+    compact: Boolean = false,
     onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -256,26 +258,38 @@ fun FamilyGroupBadge(
         modifier
     }
 
+    val sizedModifier = if (compact) {
+        chipModifier.widthIn(max = 58.dp)
+    } else {
+        chipModifier
+    }
+
     Surface(
         color = bg,
         shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, fg.copy(alpha = 0.5f)),
-        modifier = chipModifier.testTag("family_group_badge_$normalized"),
+        border = BorderStroke(if (compact) 0.75.dp else 1.dp, fg.copy(alpha = 0.5f)),
+        modifier = sizedModifier.testTag("family_group_badge_$normalized"),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            modifier = Modifier.padding(
+                horizontal = if (compact) 5.dp else 7.dp,
+                vertical = if (compact) 1.dp else 2.dp,
+            ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 4.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .size(6.dp)
+                    .size(if (compact) 4.dp else 6.dp)
                     .clip(CircleShape)
                     .background(fg),
             )
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = if (compact) 8.5.sp else 10.sp,
+                    lineHeight = if (compact) 10.sp else 12.sp,
+                ),
                 fontWeight = FontWeight.SemiBold,
                 color = fg,
                 maxLines = 1,

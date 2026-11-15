@@ -1437,19 +1437,29 @@ fun MemberPaymentCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (member.status == AtaPotifyConstants.STATUS_PAID) EmeraldContainer else SurfaceHighest
-                        ),
-                    contentAlignment = Alignment.Center,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(
-                        text = member.displayName.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (member.status == AtaPotifyConstants.STATUS_PAID) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (member.status == AtaPotifyConstants.STATUS_PAID) EmeraldContainer else SurfaceHighest
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = member.displayName.take(1).uppercase(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (member.status == AtaPotifyConstants.STATUS_PAID) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    FamilyGroupBadge(
+                        familyGroup = familyGroup,
+                        familyGroups = familyGroups,
+                        compact = true,
                     )
                 }
 
@@ -1478,7 +1488,6 @@ fun MemberPaymentCard(
                                 )
                             }
                         }
-                        FamilyGroupBadge(familyGroup = familyGroup, familyGroups = familyGroups)
                         if (streakCount >= 1) {
                             AnimatedStreakBadge(streakCount = streakCount)
                         }
@@ -2052,19 +2061,31 @@ fun ListeningLeaderboardCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(if (rank == 1 && hasSynced) EmeraldContainer else SurfaceHighest),
-                    contentAlignment = Alignment.Center,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(
-                        text = "#$rank",
-                        style = MonoNumericSmall,
-                        color = if (rank == 1 && hasSynced) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(if (rank == 1 && hasSynced) EmeraldContainer else SurfaceHighest),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "#$rank",
+                            style = MonoNumericSmall,
+                            color = if (rank == 1 && hasSynced) SpotifyEmerald else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    if (!isAdminEntry && familyGroup != null) {
+                        FamilyGroupBadge(
+                            familyGroup = familyGroup,
+                            familyGroups = familyGroups,
+                            compact = true,
+                        )
+                    }
                 }
 
                 Column(modifier = Modifier.weight(1f)) {
@@ -2091,8 +2112,6 @@ fun ListeningLeaderboardCard(
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 )
                             }
-                        } else if (familyGroup != null) {
-                            FamilyGroupBadge(familyGroup = familyGroup, familyGroups = familyGroups)
                         }
                         if (hasSynced) {
                             AnimatedEqualizerBars(
