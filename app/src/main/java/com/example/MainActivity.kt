@@ -369,6 +369,7 @@ private fun MainAppScaffold(
     val needsSpotifyEmailPrompt by viewModel.needsSpotifyEmailPrompt.collectAsStateWithLifecycle()
     val allTimeWrapped by viewModel.allTimeWrapped.collectAsStateWithLifecycle()
     val paymentStreaks by viewModel.paymentStreaks.collectAsStateWithLifecycle()
+    val selectedGroupFilter by viewModel.selectedGroupFilter.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.BOARD) }
     var notificationsEnabled by remember {
@@ -505,8 +506,16 @@ private fun MainAppScaffold(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
+                                    val selfRoleLabel = if (session.isAdmin) {
+                                        "Admin • Family 1 & 2"
+                                    } else {
+                                        val selfGroup = currentMonthMembers
+                                            .firstOrNull { it.memberKey == session.memberKey }
+                                            ?.normalizedGroup ?: session.familyGroup
+                                        AtaPotifyConstants.familyGroupLabel(selfGroup)
+                                    }
                                     Text(
-                                        text = "$effectiveDisplayName • ${if (session.isAdmin) "Admin" else "Family Member"}",
+                                        text = "$effectiveDisplayName • $selfRoleLabel",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = TextSecondary,
                                         maxLines = 1,
@@ -683,6 +692,8 @@ private fun MainAppScaffold(
                             defaultAmountLkr = planConfig.monthlyAmountLkr,
                             planConfig = planConfig,
                             paymentStreaks = paymentStreaks,
+                            selectedGroupFilter = selectedGroupFilter,
+                            onSelectGroupFilter = { viewModel.selectGroupFilter(it) },
                             spotifyConnected = spotifyConnected,
                             spotifyName = spotifyName,
                             isSpotifyClientConfigured = viewModel.isSpotifyClientConfigured,
@@ -744,14 +755,21 @@ private fun MainAppScaffold(
                                 }
                             },
                             onCopyText = copyToClipboard,
-                            onClearAnnouncement = { viewModel.updatePinnedAnnouncement("") },
+                            onRemoveAnnouncementSlide = { idx -> viewModel.removePinnedAnnouncementAt(idx) },
+                            onClearAnnouncement = { viewModel.updatePinnedAnnouncements(emptyList()) },
                             onShareMonthlySummary = {
                                 currentMonth?.let { month ->
+                                    val filteredMembers = when (selectedGroupFilter) {
+                                        AtaPotifyConstants.GROUP_1, AtaPotifyConstants.GROUP_2 ->
+                                            currentMonthMembers.filter { it.normalizedGroup == selectedGroupFilter }
+                                        else -> currentMonthMembers
+                                    }
                                     viewModel.shareMonthlySummaryToWhatsApp(
                                         context = context,
                                         month = month,
-                                        members = currentMonthMembers,
+                                        members = filteredMembers,
                                         stats = currentMonthStats,
+                                        groupFilter = selectedGroupFilter,
                                     )
                                 }
                             },
@@ -772,6 +790,8 @@ private fun MainAppScaffold(
                             whitelist = whitelist,
                             paymentStreaks = paymentStreaks,
                             allTimeWrapped = allTimeWrapped,
+                            selectedGroupFilter = selectedGroupFilter,
+                            onSelectGroupFilter = { viewModel.selectGroupFilter(it) },
                             isBusy = isBusy,
                             onSelectMonth = { viewModel.selectHistoryMonth(it) },
                             onOpenAddMemberToMonth = { month ->
@@ -781,11 +801,17 @@ private fun MainAppScaffold(
                                 deletingMonthContext = Triple(month, historyMonthMembers, historyMonthStats)
                             },
                             onShareMonthSummary = { month ->
+                                val filteredMembers = when (selectedGroupFilter) {
+                                    AtaPotifyConstants.GROUP_1, AtaPotifyConstants.GROUP_2 ->
+                                        historyMonthMembers.filter { it.normalizedGroup == selectedGroupFilter }
+                                    else -> historyMonthMembers
+                                }
                                 viewModel.shareMonthlySummaryToWhatsApp(
                                     context = context,
                                     month = month,
-                                    members = historyMonthMembers,
+                                    members = filteredMembers,
                                     stats = historyMonthStats,
+                                    groupFilter = selectedGroupFilter,
                                 )
                             },
                             onViewSlip = { member ->
@@ -842,7 +868,7 @@ private fun MainAppScaffold(
                             whitelist = whitelist,
                             pendingRequests = pendingAccessRequests,
                             isBusy = isBusy,
-                            onApproveRequest = { viewModel.approveAccessRequest(it) },
+                            onApproveRequest = { req, group -> viewModel.approveAccessRequest(req, group) },
                             onDeclineRequest = { viewModel.declineAccessRequest(it) },
                             onSaveLkrRate = { amount, alsoUpdateActive ->
                                 viewModel.updateMonthlyLkrRate(amount, alsoUpdateActive)
@@ -852,6 +878,15 @@ private fun MainAppScaffold(
                             },
                             onSavePinnedAnnouncement = { text ->
                                 viewModel.updatePinnedAnnouncement(text)
+                            },
+                            onAddPinnedAnnouncement = { text ->
+                                viewModel.addPinnedAnnouncement(text)
+                            },
+                            onRemovePinnedAnnouncementAt = { idx ->
+                                viewModel.removePinnedAnnouncementAt(idx)
+                            },
+                            onClearAllPinnedAnnouncements = {
+                                viewModel.updatePinnedAnnouncements(emptyList())
                             },
                             onCopyText = copyToClipboard,
                             onAddMemberClick = {
@@ -869,6 +904,18 @@ private fun MainAppScaffold(
                                     phone = member.phone,
                                     active = active,
                                     spotifyEmail = member.spotifyEmail,
+                                    familyGroup = member.normalizedGroup,
+                                    onDone = {},
+                                )
+                            },
+                            onSwitchMemberGroup = { member, targetGroup ->
+                                viewModel.upsertWhitelistMember(
+                                    email = member.email,
+                                    displayName = member.displayName,
+                                    phone = member.phone,
+                                    active = member.active,
+                                    spotifyEmail = member.spotifyEmail,
+                                    familyGroup = targetGroup,
                                     onDone = {},
                                 )
                             },
@@ -968,10 +1015,18 @@ private fun MainAppScaffold(
         val suggested = remember(paymentMonths) {
             AtaPotifyConstants.nextSuggestedMonthId(paymentMonths.map { it.monthId })
         }
+        val g1Active = remember(whitelist) {
+            whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_1 }
+        }
+        val g2Active = remember(whitelist) {
+            whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_2 }
+        }
         StartNewMonthDialog(
             suggestedMonthId = suggested,
             defaultAmountLkr = planConfig.monthlyAmountLkr,
             activeMemberCount = whitelist.count { it.active },
+            group1ActiveCount = g1Active,
+            group2ActiveCount = g2Active,
             isBusy = isBusy,
             onConfirm = { monthId, label, amountLkr ->
                 viewModel.startNewMonth(monthId, label, amountLkr) {
@@ -983,16 +1038,22 @@ private fun MainAppScaffold(
     }
 
     if (showWhitelistDialog && session.isAdmin) {
+        val defaultGroup = remember(whitelist) {
+            val g1Count = whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_1 }
+            if (g1Count >= AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS) AtaPotifyConstants.GROUP_2 else AtaPotifyConstants.GROUP_1
+        }
         WhitelistMemberDialog(
             editingMember = editingWhitelistMember,
+            defaultFamilyGroup = defaultGroup,
             isBusy = isBusy,
-            onSave = { email, name, phone, spotifyEmail, active ->
+            onSave = { email, name, phone, spotifyEmail, active, familyGroup ->
                 viewModel.upsertWhitelistMember(
                     email = email,
                     displayName = name,
                     phone = phone,
                     active = active,
                     spotifyEmail = spotifyEmail,
+                    familyGroup = familyGroup,
                     onDone = {
                         showWhitelistDialog = false
                         editingWhitelistMember = null
@@ -1027,11 +1088,13 @@ private fun MainAppScaffold(
 
     editingPaymentContext?.let { (month, member) ->
         if (session.isAdmin) {
+            val wlGroup = whitelist.firstOrNull { it.memberKey == member.memberKey }?.normalizedGroup
             EditPaymentDialog(
                 member = member,
                 monthLabel = month.displayLabel,
+                initialFamilyGroup = wlGroup ?: member.normalizedGroup,
                 isBusy = isBusy,
-                onSave = { displayName, status, amountLkr, clearReceipt, resetReminders ->
+                onSave = { displayName, status, amountLkr, clearReceipt, resetReminders, familyGroup ->
                     viewModel.editMemberPayment(
                         monthId = month.monthId,
                         member = member,
@@ -1040,6 +1103,7 @@ private fun MainAppScaffold(
                         amountLkr = amountLkr,
                         clearReceipt = clearReceipt,
                         resetReminders = resetReminders,
+                        familyGroup = familyGroup,
                         onDone = { editingPaymentContext = null },
                     )
                 },
@@ -1056,13 +1120,14 @@ private fun MainAppScaffold(
                 whitelist = whitelist,
                 adminDisplayName = adminDisplayName,
                 isBusy = isBusy,
-                onAdd = { email, displayName, amountLkr ->
+                onAdd = { email, displayName, amountLkr, familyGroup ->
                     viewModel.addMemberToMonth(
                         month = month,
                         existingMembers = existingMembers,
                         email = email,
                         displayName = displayName,
                         amountLkr = amountLkr,
+                        familyGroup = familyGroup,
                         onDone = { addMemberTargetContext = null },
                     )
                 },

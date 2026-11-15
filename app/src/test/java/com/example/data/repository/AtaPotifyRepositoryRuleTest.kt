@@ -61,9 +61,12 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
         val member = whitelist.first { it.memberKey == friendKey }
 
-        step("admin updatePinnedAnnouncement") {
-            paymentRepo.updatePinnedAnnouncement(
-                announcement = "New billing cycle is open! Please transfer before the 5th.",
+        step("admin updatePinnedAnnouncements") {
+            paymentRepo.updatePinnedAnnouncements(
+                announcements = listOf(
+                    "New billing cycle is open! Please transfer before the 5th.",
+                    "Welcome to Family Group 2 members!",
+                ),
                 existingAllowedEmails = listOf(friendEmail, AtaPotifyConstants.ADMIN_EMAIL),
             ).getOrThrow()
         }
@@ -295,6 +298,7 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
                 allCurrentWhitelist = emptyList(),
                 activeMonth = null,
                 activeMonthMembers = emptyList(),
+                familyGroup = AtaPotifyConstants.GROUP_2,
             ).getOrThrow()
         }
 
@@ -309,6 +313,10 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
             authRepo.resolveAccessAndSyncProfile(auth.currentUser!!).getOrThrow()
         }
         assertTrue(unlockedResolution is AccessResolution.Authorized && !unlockedResolution.isAdmin)
+        assertEquals(
+            AtaPotifyConstants.GROUP_2,
+            (unlockedResolution as AccessResolution.Authorized).familyGroup,
+        )
     }
 
     @Test

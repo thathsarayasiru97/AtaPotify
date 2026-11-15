@@ -341,6 +341,7 @@ class PaymentRepository(
         newAmountLkr: Long,
         clearReceipt: Boolean,
         resetReminders: Boolean,
+        familyGroup: String? = null,
     ): Result<Unit> {
         requireUserId()
         val cleanName = newDisplayName.trim().take(60)
@@ -353,6 +354,7 @@ class PaymentRepository(
                 AtaPotifyConstants.STATUS_PAID,
             )
         ) { "Invalid payment status" }
+        val normalizedGroup = familyGroup?.let { AtaPotifyConstants.normalizeFamilyGroup(it) }
 
         val memberRef = db.collection("payments").document(monthId)
             .collection("members").document(member.memberKey)
@@ -364,6 +366,9 @@ class PaymentRepository(
             "amountLkr" to newAmountLkr,
             "updatedAt" to FieldValue.serverTimestamp(),
         )
+        if (normalizedGroup != null) {
+            updates["familyGroup"] = normalizedGroup
+        }
 
         if (clearReceipt) {
             updates["hasReceipt"] = false
@@ -384,6 +389,23 @@ class PaymentRepository(
         batch.update(memberRef, updates)
         if (clearReceipt && member.hasReceipt) {
             batch.delete(slipRef)
+        }
+        if (normalizedGroup != null) {
+            val whitelistRef = db.collection("whitelist").document(member.memberKey)
+            val wlExists = try {
+                whitelistRef.get().await().exists()
+            } catch (_: Exception) {
+                false
+            }
+            if (wlExists) {
+                batch.update(
+                    whitelistRef,
+                    mapOf(
+                        "familyGroup" to normalizedGroup,
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+            }
         }
 
         return try {
@@ -448,6 +470,7 @@ class PaymentRepository(
         email: String,
         displayName: String,
         amountLkr: Long,
+        familyGroup: String = AtaPotifyConstants.GROUP_1,
     ): Result<Unit> {
         requireUserId()
         val emailLower = AtaPotifyConstants.normalizeEmail(email)
@@ -455,6 +478,7 @@ class PaymentRepository(
         val cleanName = displayName.trim().take(60)
         require(cleanName.isNotEmpty()) { "Name cannot be blank" }
         require(amountLkr in 1..100_000) { "Amount must be between 1 and 100,000 LKR" }
+        val normalizedGroup = AtaPotifyConstants.normalizeFamilyGroup(familyGroup)
 
         val memberKey = AtaPotifyConstants.memberKeyForEmail(emailLower)
         val mergedEmails = (month.allowedEmails + existingMembers.map { AtaPotifyConstants.normalizeEmail(it.memberEmail) } +
@@ -489,6 +513,7 @@ class PaymentRepository(
                 mapOf(
                     "displayName" to cleanName,
                     "amountLkr" to amountLkr,
+                    "familyGroup" to normalizedGroup,
                     "allowedEmails" to mergedEmails,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -505,6 +530,7 @@ class PaymentRepository(
                     "hasReceipt" to false,
                     "allowedEmails" to mergedEmails,
                     "reminderCount" to 0L,
+                    "familyGroup" to normalizedGroup,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -616,6 +642,7 @@ class PaymentRepository(
                     "hasReceipt" to false,
                     "allowedEmails" to allowedEmails,
                     "reminderCount" to 0L,
+                    "familyGroup" to member.normalizedGroup,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -751,15 +778,31 @@ class PaymentRepository(
         announcement: String,
         existingAllowedEmails: List<String>,
     ): Result<Unit> {
+        val clean = announcement.trim().take(280)
+        return updatePinnedAnnouncements(
+            announcements = if (clean.isNotEmpty()) listOf(clean) else emptyList(),
+            existingAllowedEmails = existingAllowedEmails,
+        )
+    }
+
+    suspend fun updatePinnedAnnouncements(
+        announcements: List<String>,
+        existingAllowedEmails: List<String>,
+    ): Result<Unit> {
         requireUserId()
-        val cleanAnnouncement = announcement.trim().take(280)
+        val cleanList = announcements
+            .map { it.trim().take(280) }
+            .filter { it.isNotEmpty() }
+            .take(AtaPotifyConstants.MAX_PINNED_ANNOUNCEMENTS)
+        val primaryAnnouncement = cleanList.firstOrNull().orEmpty()
         val configRef = db.collection("plan_config").document(AtaPotifyConstants.PLAN_CONFIG_DOC_ID)
         return try {
             val snap = configRef.get().await()
             if (snap.exists()) {
                 configRef.update(
                     mapOf(
-                        "pinnedAnnouncement" to cleanAnnouncement,
+                        "pinnedAnnouncement" to primaryAnnouncement,
+                        "pinnedAnnouncements" to cleanList,
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
                 ).await()
@@ -770,7 +813,8 @@ class PaymentRepository(
                         "monthlyAmountLkr" to AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
                         "currency" to AtaPotifyConstants.CURRENCY_LKR,
                         "allowedEmails" to existingAllowedEmails.take(25),
-                        "pinnedAnnouncement" to cleanAnnouncement,
+                        "pinnedAnnouncement" to primaryAnnouncement,
+                        "pinnedAnnouncements" to cleanList,
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
                 ).await()
@@ -831,6 +875,7 @@ class PaymentRepository(
                                 "hasReceipt" to false,
                                 "allowedEmails" to baseAllowedEmails,
                                 "reminderCount" to 0L,
+                                "familyGroup" to member.normalizedGroup,
                                 "createdAt" to FieldValue.serverTimestamp(),
                                 "confirmedAt" to FieldValue.serverTimestamp(),
                                 "updatedAt" to FieldValue.serverTimestamp(),
@@ -865,6 +910,7 @@ class PaymentRepository(
                             "hasReceipt" to false,
                             "allowedEmails" to baseAllowedEmails,
                             "reminderCount" to 0L,
+                            "familyGroup" to wl.normalizedGroup,
                             "createdAt" to FieldValue.serverTimestamp(),
                             "updatedAt" to FieldValue.serverTimestamp(),
                         )
@@ -885,6 +931,7 @@ class PaymentRepository(
                                 "hasReceipt" to false,
                                 "allowedEmails" to baseAllowedEmails,
                                 "reminderCount" to 0L,
+                                "familyGroup" to member.normalizedGroup,
                                 "createdAt" to FieldValue.serverTimestamp(),
                                 "confirmedAt" to FieldValue.serverTimestamp(),
                                 "updatedAt" to FieldValue.serverTimestamp(),
@@ -958,6 +1005,7 @@ class PaymentRepository(
         activeMonth: PaymentMonth?,
         activeMonthMembers: List<MemberPaymentStatus>,
         spotifyEmail: String? = null,
+        familyGroup: String? = null,
     ): Result<Unit> {
         requireUserId()
         val emailLower = AtaPotifyConstants.normalizeEmail(email)
@@ -967,6 +1015,10 @@ class PaymentRepository(
         val cleanPhone = AtaPotifyConstants.sanitizeWhatsAppDigits(phone).take(24)
         val cleanSpotifyEmail = spotifyEmail?.let { AtaPotifyConstants.normalizeEmail(it).take(160) }
         val memberKey = AtaPotifyConstants.memberKeyForEmail(emailLower)
+        val existingWlModel = allCurrentWhitelist.firstOrNull { it.memberKey == memberKey }
+        val normalizedGroup = AtaPotifyConstants.normalizeFamilyGroup(
+            familyGroup ?: existingWlModel?.familyGroup ?: AtaPotifyConstants.GROUP_1
+        )
 
         val whitelistRef = db.collection("whitelist").document(memberKey)
         val existingDoc = try {
@@ -991,6 +1043,7 @@ class PaymentRepository(
                 "displayName" to cleanName,
                 "phone" to cleanPhone,
                 "active" to active,
+                "familyGroup" to normalizedGroup,
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
             if (cleanSpotifyEmail != null) {
@@ -1008,6 +1061,7 @@ class PaymentRepository(
                     "spotifyEmail" to (cleanSpotifyEmail ?: ""),
                     "role" to AtaPotifyConstants.ROLE_MEMBER,
                     "active" to active,
+                    "familyGroup" to normalizedGroup,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -1057,6 +1111,7 @@ class PaymentRepository(
                     monthRef.collection("members").document(memberKey),
                     mapOf(
                         "displayName" to cleanName,
+                        "familyGroup" to normalizedGroup,
                         "allowedEmails" to mergedMonthEmails,
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
@@ -1073,6 +1128,7 @@ class PaymentRepository(
                         "hasReceipt" to false,
                         "allowedEmails" to mergedMonthEmails,
                         "reminderCount" to 0L,
+                        "familyGroup" to normalizedGroup,
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
@@ -1148,6 +1204,7 @@ class PaymentRepository(
         allCurrentWhitelist: List<WhitelistMember>,
         activeMonth: PaymentMonth?,
         activeMonthMembers: List<MemberPaymentStatus>,
+        familyGroup: String = AtaPotifyConstants.GROUP_1,
     ): Result<Unit> {
         requireUserId()
         val emailLower = AtaPotifyConstants.normalizeEmail(request.email)
@@ -1155,6 +1212,7 @@ class PaymentRepository(
         val cleanName = request.displayName.trim().ifBlank { emailLower.substringBefore("@") }.take(60)
         val cleanPhone = AtaPotifyConstants.sanitizeWhatsAppDigits(request.phone).take(24)
         val cleanSpotifyEmail = AtaPotifyConstants.normalizeEmail(request.spotifyEmail).take(160)
+        val normalizedGroup = AtaPotifyConstants.normalizeFamilyGroup(familyGroup)
 
         val whitelistRef = db.collection("whitelist").document(memberKey)
         val existingWhitelistDoc = try {
@@ -1178,6 +1236,7 @@ class PaymentRepository(
                 "displayName" to cleanName,
                 "phone" to cleanPhone,
                 "active" to true,
+                "familyGroup" to normalizedGroup,
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
             if (cleanSpotifyEmail.isNotBlank()) {
@@ -1195,6 +1254,7 @@ class PaymentRepository(
                     "spotifyEmail" to cleanSpotifyEmail,
                     "role" to AtaPotifyConstants.ROLE_MEMBER,
                     "active" to true,
+                    "familyGroup" to normalizedGroup,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
@@ -1255,6 +1315,7 @@ class PaymentRepository(
                     monthRef.collection("members").document(memberKey),
                     mapOf(
                         "displayName" to cleanName,
+                        "familyGroup" to normalizedGroup,
                         "allowedEmails" to mergedMonthEmails,
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )
@@ -1271,6 +1332,7 @@ class PaymentRepository(
                         "hasReceipt" to false,
                         "allowedEmails" to mergedMonthEmails,
                         "reminderCount" to 0L,
+                        "familyGroup" to normalizedGroup,
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp(),
                     )

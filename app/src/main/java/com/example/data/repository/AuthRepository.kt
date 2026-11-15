@@ -32,6 +32,7 @@ sealed interface AccessResolution {
         val displayName: String,
         val phone: String,
         val spotifyEmail: String = "",
+        val familyGroup: String = AtaPotifyConstants.GROUP_1,
     ) : AccessResolution
 
     data class AwaitingApproval(
@@ -230,6 +231,7 @@ class AuthRepository(
                     displayName = resolvedName,
                     phone = resolvedPhone,
                     spotifyEmail = resolvedSpotifyEmail,
+                    familyGroup = whitelistEntry?.normalizedGroup ?: AtaPotifyConstants.GROUP_1,
                 )
             )
         } catch (e: CancellationException) {

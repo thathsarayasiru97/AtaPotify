@@ -176,6 +176,9 @@ class AtaPotifyViewModel(
 ) : ViewModel() {
 
     private val _selectedHistoryMonthId = MutableStateFlow<String?>(null)
+    private val _selectedGroupFilter = MutableStateFlow(AtaPotifyConstants.GROUP_ALL)
+    val selectedGroupFilter: StateFlow<String> = _selectedGroupFilter.asStateFlow()
+
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
@@ -562,6 +565,14 @@ class AtaPotifyViewModel(
         _selectedHistoryMonthId.value = monthId
     }
 
+    fun selectGroupFilter(group: String) {
+        _selectedGroupFilter.value = when (group) {
+            AtaPotifyConstants.GROUP_1 -> AtaPotifyConstants.GROUP_1
+            AtaPotifyConstants.GROUP_2 -> AtaPotifyConstants.GROUP_2
+            else -> AtaPotifyConstants.GROUP_ALL
+        }
+    }
+
     fun openAutoReminderSheet() {
         _showAutoReminderSheet.value = true
     }
@@ -787,6 +798,7 @@ class AtaPotifyViewModel(
         amountLkr: Long,
         clearReceipt: Boolean,
         resetReminders: Boolean,
+        familyGroup: String? = null,
         onDone: () -> Unit,
     ) {
         viewModelScope.launch {
@@ -799,6 +811,7 @@ class AtaPotifyViewModel(
                 newAmountLkr = amountLkr,
                 clearReceipt = clearReceipt,
                 resetReminders = resetReminders,
+                familyGroup = familyGroup,
             )
             _isBusy.value = false
             res.fold(
@@ -845,6 +858,7 @@ class AtaPotifyViewModel(
         email: String,
         displayName: String,
         amountLkr: Long,
+        familyGroup: String = AtaPotifyConstants.GROUP_1,
         onDone: () -> Unit,
     ) {
         viewModelScope.launch {
@@ -855,6 +869,7 @@ class AtaPotifyViewModel(
                 email = email,
                 displayName = displayName,
                 amountLkr = amountLkr,
+                familyGroup = familyGroup,
             )
             _isBusy.value = false
             res.fold(
@@ -939,12 +954,14 @@ class AtaPotifyViewModel(
         month: PaymentMonth,
         members: List<MemberPaymentStatus>,
         stats: List<ListeningStat>,
+        groupFilter: String = _selectedGroupFilter.value,
     ) {
         val text = buildWhatsAppMonthlySummaryText(
             month = month,
             members = members,
             stats = stats,
             planConfig = planConfig.value,
+            groupFilter = groupFilter,
         )
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -1033,24 +1050,53 @@ class AtaPotifyViewModel(
     }
 
     fun updatePinnedAnnouncement(announcement: String) {
+        val clean = announcement.trim()
+        updatePinnedAnnouncements(if (clean.isEmpty()) emptyList() else listOf(clean))
+    }
+
+    fun updatePinnedAnnouncements(announcements: List<String>) {
         viewModelScope.launch {
             _isBusy.value = true
             val emails = whitelist.value.filter { it.active }.map { AtaPotifyConstants.normalizeEmail(it.email) }
-            val res = paymentRepository.updatePinnedAnnouncement(
-                announcement = announcement,
+            val cleanList = announcements.map { it.trim().take(280) }.filter { it.isNotEmpty() }
+                .take(AtaPotifyConstants.MAX_PINNED_ANNOUNCEMENTS)
+            val res = paymentRepository.updatePinnedAnnouncements(
+                announcements = cleanList,
                 existingAllowedEmails = emails,
             )
             _isBusy.value = false
             res.fold(
                 onSuccess = {
-                    val msg = if (announcement.isBlank()) "Cleared pinned announcement" else "Pinned announcement to Board"
+                    val msg = when {
+                        cleanList.isEmpty() -> "Cleared all pinned announcements"
+                        cleanList.size == 1 -> "Pinned announcement to Board"
+                        else -> "Updated ${cleanList.size} pinned slideshow announcements"
+                    }
                     _snackbarEvents.tryEmit(msg)
                 },
                 onFailure = { e ->
-                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to update announcement")
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to update announcements")
                 },
             )
         }
+    }
+
+    fun addPinnedAnnouncement(newText: String) {
+        val clean = newText.trim().take(280)
+        if (clean.isEmpty()) return
+        val current = planConfig.value.effectiveAnnouncements
+        if (current.size >= AtaPotifyConstants.MAX_PINNED_ANNOUNCEMENTS) {
+            _snackbarEvents.tryEmit("Maximum ${AtaPotifyConstants.MAX_PINNED_ANNOUNCEMENTS} pinned messages reached")
+            return
+        }
+        updatePinnedAnnouncements(current + clean)
+    }
+
+    fun removePinnedAnnouncementAt(index: Int) {
+        val current = planConfig.value.effectiveAnnouncements.toMutableList()
+        if (index !in current.indices) return
+        current.removeAt(index)
+        updatePinnedAnnouncements(current)
     }
 
     fun shareVerifiedReceiptToWhatsApp(
@@ -1105,7 +1151,8 @@ class AtaPotifyViewModel(
         phone: String,
         active: Boolean,
         spotifyEmail: String? = null,
-        onDone: () -> Unit,
+        familyGroup: String? = null,
+        onDone: () -> Unit = {},
     ) {
         viewModelScope.launch {
             _isBusy.value = true
@@ -1118,11 +1165,13 @@ class AtaPotifyViewModel(
                 activeMonth = currentMonth.value,
                 activeMonthMembers = currentMonthMembers.value,
                 spotifyEmail = spotifyEmail,
+                familyGroup = familyGroup,
             )
             _isBusy.value = false
             res.fold(
                 onSuccess = {
-                    _snackbarEvents.tryEmit("Saved $displayName to whitelist")
+                    val groupLabel = familyGroup?.let { " (${AtaPotifyConstants.familyGroupLabel(it)})" }.orEmpty()
+                    _snackbarEvents.tryEmit("Saved $displayName$groupLabel")
                     onDone()
                 },
                 onFailure = { e ->
@@ -1144,7 +1193,10 @@ class AtaPotifyViewModel(
         }
     }
 
-    fun approveAccessRequest(request: AccessRequest) {
+    fun approveAccessRequest(
+        request: AccessRequest,
+        familyGroup: String = AtaPotifyConstants.GROUP_1,
+    ) {
         viewModelScope.launch {
             _isBusy.value = true
             val res = paymentRepository.approveAccessRequest(
@@ -1152,11 +1204,13 @@ class AtaPotifyViewModel(
                 allCurrentWhitelist = whitelist.value,
                 activeMonth = currentMonth.value,
                 activeMonthMembers = currentMonthMembers.value,
+                familyGroup = familyGroup,
             )
             _isBusy.value = false
             res.fold(
                 onSuccess = {
-                    _snackbarEvents.tryEmit("Approved ${request.displayName} for AtaPotify")
+                    val groupLabel = AtaPotifyConstants.familyGroupLabel(familyGroup)
+                    _snackbarEvents.tryEmit("Approved ${request.displayName} into $groupLabel")
                 },
                 onFailure = { e ->
                     _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to approve request")

@@ -72,6 +72,7 @@ import com.example.data.model.WhitelistMember
 import com.example.data.model.calculateMonthlyBillingSummary
 import com.example.data.repository.AccessResolution
 import com.example.ui.components.AnimatedStreakBadge
+import com.example.ui.components.FamilyGroupFilterBar
 import com.example.ui.components.pressBounceClickable
 import com.example.ui.theme.AmberContainer
 import com.example.ui.theme.AmberWarning
@@ -97,6 +98,8 @@ fun HistoryScreen(
     whitelist: List<WhitelistMember>,
     paymentStreaks: Map<String, Int> = emptyMap(),
     allTimeWrapped: AllTimeWrappedSummary? = null,
+    selectedGroupFilter: String = AtaPotifyConstants.GROUP_ALL,
+    onSelectGroupFilter: (String) -> Unit = {},
     isBusy: Boolean,
     onSelectMonth: (String) -> Unit,
     onOpenAddMemberToMonth: (PaymentMonth) -> Unit,
@@ -117,10 +120,54 @@ fun HistoryScreen(
         whitelist.associate { it.memberKey to it.phone }
     }
 
-    val leaderboardRoster = remember(stats, members, adminDisplayName, session) {
+    val groupByKey = remember(whitelist, members) {
+        val map = mutableMapOf<String, String>()
+        members.forEach { map[it.memberKey] = it.normalizedGroup }
+        whitelist.forEach { wl ->
+            if (wl.familyGroup == AtaPotifyConstants.GROUP_2 || map[wl.memberKey] == null) {
+                map[wl.memberKey] = wl.normalizedGroup
+            }
+        }
+        map
+    }
+
+    val group1Count = remember(members, groupByKey) {
+        members.count { (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_1 }
+    }
+    val group2Count = remember(members, groupByKey) {
+        members.count { (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_2 }
+    }
+
+    val filteredMembers = remember(members, selectedGroupFilter, groupByKey) {
+        when (selectedGroupFilter) {
+            AtaPotifyConstants.GROUP_1 -> members.filter {
+                (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_1
+            }
+            AtaPotifyConstants.GROUP_2 -> members.filter {
+                (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_2
+            }
+            else -> members
+        }
+    }
+
+    val filteredStats = remember(stats, filteredMembers, selectedGroupFilter, groupByKey) {
+        if (selectedGroupFilter == AtaPotifyConstants.GROUP_ALL) {
+            stats
+        } else {
+            val allowedKeys = filteredMembers.map { it.memberKey }.toSet()
+            val adminKey = AtaPotifyConstants.memberKeyForEmail(AtaPotifyConstants.ADMIN_EMAIL)
+            stats.filter { stat ->
+                stat.memberKey in allowedKeys ||
+                    stat.memberKey == adminKey ||
+                    groupByKey[stat.memberKey] == selectedGroupFilter
+            }
+        }
+    }
+
+    val leaderboardRoster = remember(filteredStats, filteredMembers, adminDisplayName, session) {
         buildLeaderboardRoster(
-            syncedStats = stats,
-            monthMembers = members,
+            syncedStats = filteredStats,
+            monthMembers = filteredMembers,
             adminDisplayName = adminDisplayName,
             session = session,
         )
@@ -221,11 +268,22 @@ fun HistoryScreen(
                 }
 
                 if (selectedMonth != null) {
+                    item(key = "history_family_group_filter") {
+                        FamilyGroupFilterBar(
+                            selectedGroup = selectedGroupFilter,
+                            allCount = members.size,
+                            group1Count = group1Count,
+                            group2Count = group2Count,
+                            onSelectGroup = onSelectGroupFilter,
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+
                     item {
-                        val summary = remember(members) { calculateMonthlyBillingSummary(members) }
+                        val summary = remember(filteredMembers) { calculateMonthlyBillingSummary(filteredMembers) }
                         MonthlyBillingSummaryCard(
                             month = selectedMonth,
-                            members = members,
+                            members = filteredMembers,
                             summary = summary,
                             selfEmail = session.email,
                             isAdmin = session.isAdmin,
@@ -299,16 +357,18 @@ fun HistoryScreen(
                         }
                     }
 
-                    items(members, key = { "hist_${selectedMonth.monthId}_${it.memberKey}" }) { member ->
+                    items(filteredMembers, key = { "hist_${selectedMonth.monthId}_${it.memberKey}" }) { member ->
                         val isSelf = member.memberEmail.equals(session.email, ignoreCase = true)
                         val phone = phoneByKey[member.memberKey].orEmpty()
                         val streak = paymentStreaks[member.memberKey] ?: 0
+                        val resolvedGroup = groupByKey[member.memberKey] ?: member.normalizedGroup
                         MemberPaymentCard(
                             member = member,
                             isSelf = isSelf,
                             isAdmin = session.isAdmin,
                             whatsappDigits = phone,
                             streakCount = streak,
+                            familyGroup = resolvedGroup,
                             isBusy = isBusy,
                             modifier = Modifier.animateItem(),
                             onUploadSlipClick = {},
@@ -339,12 +399,14 @@ fun HistoryScreen(
                             leaderboardRoster.withIndex().toList(),
                             key = { "hist_stat_${selectedMonth.monthId}_${it.value.memberKey}" },
                         ) { (idx, stat) ->
+                            val isAdminRow = stat.memberEmail.equals(AtaPotifyConstants.ADMIN_EMAIL, ignoreCase = true)
                             ListeningLeaderboardCard(
                                 rank = idx + 1,
                                 stat = stat,
                                 maxMinutes = topHistMinutes,
                                 isSelf = stat.memberEmail.equals(session.email, ignoreCase = true),
-                                isAdminEntry = stat.memberEmail.equals(AtaPotifyConstants.ADMIN_EMAIL, ignoreCase = true),
+                                isAdminEntry = isAdminRow,
+                                familyGroup = if (isAdminRow) null else groupByKey[stat.memberKey],
                                 onOpenInSpotify = onOpenSpotifyQuery,
                                 modifier = Modifier.animateItem(),
                             )

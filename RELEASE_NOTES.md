@@ -1,6 +1,4 @@
-### What's New in v1.3.6
-- **Admin Pinned Board Announcements**: Admin can broadcast a live pinned banner at the top of the Board tab with an animated megaphone indicator and one-tap clear.
-- **Payment Streak Badges (`🔥 N-mo streak`)**: Automatically tracks consecutive paid billing cycles per member on Board & History cards and highlights the **Longest Payment Streak** in All-Time Wrapped.
-- **Digital Verified Payment Receipts**: Paid members can tap their `Paid` status pill or **Verified Receipt** button to open and share a digital receipt card (`#ATP-YYYYMM-XXXX`) to WhatsApp.
-- **Family Mix & One-Tap Open in Spotify**: Added the **Family Mix — On Repeat** card and tappable artist/track chips that open directly in Spotify.
-- **Comprehensive UI Animations**: Added live 4-bar equalizer animations, drifting aurora hero gradients, spring-physics press interactions, and animated verified receipt seals.
+### What's New in v1.4.0
+- **Family Group 1 & Family Group 2 Support**: Manage two 6-slot Spotify Family groups in one app with live `X/6` slot capacity counters, 1-tap group assignment on pending requests and roster cards, `Fam 1` / `Fam 2` member badges, and an animated **All Groups / Family 1 / Family 2** switcher across Board, History, Leaderboard, and WhatsApp exports.
+- **Multi-Slide Pinned Announcements Carousel**: Admin can queue up to 8 pinned announcement slides (`Add Slide`, individual slide removal, `Clear All`). Slides auto-rotate every 5 seconds on the Board with a live progress bar, vertical slide transitions, `1/N` counter pill, dot indicators, and tap-to-advance.
+- **Smart Group Auto-Defaulting**: Pending join requests automatically suggest **Family 2** once **Family 1** reaches 6 active members, and switching a member's group syncs both the whitelist roster and the active billing month.

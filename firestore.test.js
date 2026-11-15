@@ -381,6 +381,32 @@ test("Admin can create month batch, confirm payment, log reminder, and update LK
       bankAccountHolder: "Y. Thathsara",
       bankBranch: "Galle",
       pinnedAnnouncement: "Please use Commercial Bank account this cycle!",
+      pinnedAnnouncements: [
+        "Please use Commercial Bank account this cycle!",
+        "Family Group 2 is now live — welcome aboard!",
+      ],
+      updatedAt: new Date(),
+    })
+  );
+
+  // Admin can assign familyGroup on whitelist and payment member docs
+  await assertSucceeds(
+    adminDb.collection("whitelist").doc(ALICE_KEY).update({
+      familyGroup: "group_2",
+      updatedAt: new Date(),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("payments").doc(MONTH_ID).collection("members").doc(ALICE_KEY).update({
+      familyGroup: "group_2",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Invalid familyGroup value is rejected
+  await assertFails(
+    adminDb.collection("whitelist").doc(ALICE_KEY).update({
+      familyGroup: "group_99",
       updatedAt: new Date(),
     })
   );

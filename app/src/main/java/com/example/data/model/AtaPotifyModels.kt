@@ -28,6 +28,24 @@ object AtaPotifyConstants {
     const val PLAN_CONFIG_DOC_ID = "settings"
     const val SLIP_DOC_ID = "slip"
 
+    const val GROUP_ALL = "all"
+    const val GROUP_1 = "group_1"
+    const val GROUP_2 = "group_2"
+    const val MAX_SPOTIFY_FAMILY_SLOTS = 6
+    const val MAX_PINNED_ANNOUNCEMENTS = 8
+
+    fun normalizeFamilyGroup(raw: String?): String =
+        if (raw == GROUP_2) GROUP_2 else GROUP_1
+
+    fun familyGroupLabel(group: String): String = when (group) {
+        GROUP_2 -> "Family 2"
+        GROUP_1 -> "Family 1"
+        else -> "All Groups"
+    }
+
+    fun familyGroupShortBadge(group: String): String =
+        if (group == GROUP_2) "Fam 2" else "Fam 1"
+
     fun normalizeEmail(email: String): String = email.trim().lowercase(Locale.US)
 
     fun memberKeyForEmail(email: String): String {
@@ -113,13 +131,22 @@ data class PlanConfig(
     val bankAccountHolder: String = "",
     val bankBranch: String = "",
     val pinnedAnnouncement: String = "",
+    val pinnedAnnouncements: List<String> = emptyList(),
     @ServerTimestamp val updatedAt: Timestamp? = null,
 ) {
     val hasBankDetails: Boolean
         get() = bankAccountNumber.isNotBlank() || bankName.isNotBlank()
 
+    val effectiveAnnouncements: List<String>
+        get() = pinnedAnnouncements
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .ifEmpty {
+                listOfNotNull(pinnedAnnouncement.trim().takeIf { it.isNotEmpty() })
+            }
+
     val hasPinnedAnnouncement: Boolean
-        get() = pinnedAnnouncement.isNotBlank()
+        get() = effectiveAnnouncements.isNotEmpty()
 
     fun formattedBankCopyText(): String = buildString {
         if (bankName.isNotBlank()) appendLine("Bank: $bankName")
@@ -139,9 +166,13 @@ data class WhitelistMember(
     val spotifyEmail: String = "",
     val role: String = AtaPotifyConstants.ROLE_MEMBER,
     val active: Boolean = true,
+    val familyGroup: String = AtaPotifyConstants.GROUP_1,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
-)
+) {
+    val normalizedGroup: String
+        get() = AtaPotifyConstants.normalizeFamilyGroup(familyGroup)
+}
 
 @IgnoreExtraProperties
 data class PaymentMonth(
@@ -166,12 +197,15 @@ data class MemberPaymentStatus(
     val hasReceipt: Boolean = false,
     val allowedEmails: List<String> = emptyList(),
     val reminderCount: Long = 0L,
+    val familyGroup: String = AtaPotifyConstants.GROUP_1,
     @ServerTimestamp val createdAt: Timestamp? = null,
     val submittedAt: Timestamp? = null,
     val confirmedAt: Timestamp? = null,
     val lastRemindedAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null,
 ) {
+    val normalizedGroup: String
+        get() = AtaPotifyConstants.normalizeFamilyGroup(familyGroup)
     fun pendingAgeDays(nowMillis: Long = System.currentTimeMillis()): Long {
         val startMillis = createdAt?.toDate()?.time ?: return 0L
         return ((nowMillis - startMillis).coerceAtLeast(0L)) / (24L * 60L * 60L * 1000L)
@@ -482,10 +516,17 @@ fun buildWhatsAppMonthlySummaryText(
     members: List<MemberPaymentStatus>,
     stats: List<ListeningStat>,
     planConfig: PlanConfig,
+    groupFilter: String = AtaPotifyConstants.GROUP_ALL,
 ): String {
     val summary = calculateMonthlyBillingSummary(members)
+    val hasMultipleGroups = members.map { it.normalizedGroup }.distinct().size > 1
+    val groupSuffix = if (groupFilter == AtaPotifyConstants.GROUP_1 || groupFilter == AtaPotifyConstants.GROUP_2) {
+        " (${AtaPotifyConstants.familyGroupLabel(groupFilter)})"
+    } else {
+        ""
+    }
     return buildString {
-        appendLine("*AtaPotify — ${month.displayLabel}*")
+        appendLine("*AtaPotify — ${month.displayLabel}$groupSuffix*")
         appendLine("Share: LKR ${month.amountLkr} • Collected: LKR ${summary.collectedLkr}/${summary.expectedTotalLkr} (${summary.paidCount}/${summary.totalCount} Paid)")
         appendLine()
         if (members.isNotEmpty()) {
@@ -496,7 +537,12 @@ fun buildWhatsAppMonthlySummaryText(
                     AtaPotifyConstants.STATUS_VERIFYING -> "[VERIFYING]"
                     else -> "[PENDING]"
                 }
-                appendLine("• ${m.displayName}: $badge (LKR ${m.amountLkr})")
+                val groupTag = if (groupFilter == AtaPotifyConstants.GROUP_ALL && hasMultipleGroups) {
+                    " [${AtaPotifyConstants.familyGroupShortBadge(m.normalizedGroup)}]"
+                } else {
+                    ""
+                }
+                appendLine("• ${m.displayName}$groupTag: $badge (LKR ${m.amountLkr})")
             }
         }
         val activeStats = stats.filter { it.minutesListened > 0L }.sortedByDescending { it.minutesListened }

@@ -30,6 +30,7 @@
         "bankAccountHolder": { "type": "string", "description": "Bank account holder name" },
         "bankBranch": { "type": "string", "description": "Bank branch name" },
         "pinnedAnnouncement": { "type": "string", "description": "Optional admin-pinned notice shown at the top of the Board" },
+        "pinnedAnnouncements": { "type": "array", "description": "Rotating slideshow list of admin-pinned announcements (up to 8 slides)" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
       },
       "required": ["planName", "monthlyAmountLkr", "currency", "allowedEmails", "updatedAt"]
@@ -44,6 +45,7 @@
         "displayName": { "type": "string", "description": "Friend display name" },
         "phone": { "type": "string", "description": "WhatsApp number in international digits" },
         "spotifyEmail": { "type": "string", "description": "Email address assigned to the friend's Spotify account" },
+        "familyGroup": { "type": "string", "enum": ["group_1", "group_2"], "description": "Assigned Spotify Family plan group (group_1 or group_2)" },
         "role": { "type": "string", "enum": ["member"], "description": "Member role" },
         "active": { "type": "boolean", "description": "Whether friend is active in current plan" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
@@ -74,6 +76,7 @@
         "memberKey": { "type": "string", "description": "Deterministic member key" },
         "memberEmail": { "type": "string", "description": "Lowercase member email for self-update checks" },
         "displayName": { "type": "string", "description": "Member display name" },
+        "familyGroup": { "type": "string", "enum": ["group_1", "group_2"], "description": "Assigned Spotify Family plan group (group_1 or group_2)" },
         "status": { "type": "string", "enum": ["pending", "verifying", "paid"], "description": "Payment state" },
         "amountLkr": { "type": "integer", "description": "Amount due in LKR" },
         "hasReceipt": { "type": "boolean", "description": "True if a receipt image has been uploaded" },

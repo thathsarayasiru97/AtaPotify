@@ -190,5 +190,55 @@ class MonthlyBillingSummaryTest {
         org.junit.Assert.assertTrue(receiptText.contains("PAID & SETTLED"))
         org.junit.Assert.assertTrue(receiptText.contains("3 consecutive months"))
     }
+
+    @Test
+    fun planConfigResolvesMultiplePinnedAnnouncementsAndLegacyFallback() {
+        val multiConfig = PlanConfig(
+            pinnedAnnouncement = "Slide 1",
+            pinnedAnnouncements = listOf("Slide 1", "  Slide 2  ", "", "Slide 3"),
+        )
+        assertEquals(listOf("Slide 1", "Slide 2", "Slide 3"), multiConfig.effectiveAnnouncements)
+        org.junit.Assert.assertTrue(multiConfig.hasPinnedAnnouncement)
+
+        val legacyConfig = PlanConfig(
+            pinnedAnnouncement = "Legacy single message",
+            pinnedAnnouncements = emptyList(),
+        )
+        assertEquals(listOf("Legacy single message"), legacyConfig.effectiveAnnouncements)
+        org.junit.Assert.assertTrue(legacyConfig.hasPinnedAnnouncement)
+    }
+
+    @Test
+    fun whatsappSummaryIncludesFamilyGroupHeaderAndBadges() {
+        val month = PaymentMonth(monthId = "2026-11", displayLabel = "November 2026", amountLkr = 450L)
+        val group2Members = listOf(
+            MemberPaymentStatus(
+                memberKey = "nadun",
+                displayName = "Nadun",
+                status = AtaPotifyConstants.STATUS_PAID,
+                amountLkr = 450L,
+                familyGroup = AtaPotifyConstants.GROUP_2,
+            ),
+            MemberPaymentStatus(
+                memberKey = "sachin",
+                displayName = "Sachin",
+                status = AtaPotifyConstants.STATUS_PENDING,
+                amountLkr = 450L,
+                familyGroup = AtaPotifyConstants.GROUP_2,
+            ),
+        )
+
+        val summaryText = buildWhatsAppMonthlySummaryText(
+            month = month,
+            members = group2Members,
+            stats = emptyList(),
+            planConfig = PlanConfig(),
+            groupFilter = AtaPotifyConstants.GROUP_2,
+        )
+        org.junit.Assert.assertTrue(summaryText.contains("November 2026 (Family 2)"))
+        org.junit.Assert.assertTrue(summaryText.contains("Nadun"))
+        org.junit.Assert.assertTrue(summaryText.contains("Sachin"))
+    }
 }
+
 

@@ -655,6 +655,8 @@ fun StartNewMonthDialog(
     suggestedMonthId: String,
     defaultAmountLkr: Long,
     activeMemberCount: Int,
+    group1ActiveCount: Int = activeMemberCount,
+    group2ActiveCount: Int = 0,
     isBusy: Boolean,
     onConfirm: (monthId: String, label: String, amountLkr: Long) -> Unit,
     onDismiss: () -> Unit,
@@ -672,7 +674,7 @@ fun StartNewMonthDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "Initializes $activeMemberCount active whitelisted friend(s) as Pending.",
+                    text = "Initializes $activeMemberCount active friend(s) (Family 1: $group1ActiveCount, Family 2: $group2ActiveCount) as Pending.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                 )
@@ -730,8 +732,9 @@ fun StartNewMonthDialog(
 @Composable
 fun WhitelistMemberDialog(
     editingMember: WhitelistMember?,
+    defaultFamilyGroup: String = AtaPotifyConstants.GROUP_1,
     isBusy: Boolean,
-    onSave: (email: String, name: String, phone: String, spotifyEmail: String, active: Boolean) -> Unit,
+    onSave: (email: String, name: String, phone: String, spotifyEmail: String, active: Boolean, familyGroup: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var email by remember(editingMember) { mutableStateOf(editingMember?.email.orEmpty()) }
@@ -739,6 +742,9 @@ fun WhitelistMemberDialog(
     var phone by remember(editingMember) { mutableStateOf(editingMember?.phone.orEmpty()) }
     var spotifyEmail by remember(editingMember) { mutableStateOf(editingMember?.spotifyEmail.orEmpty()) }
     var active by remember(editingMember) { mutableStateOf(editingMember?.active ?: true) }
+    var familyGroup by remember(editingMember, defaultFamilyGroup) {
+        mutableStateOf(editingMember?.normalizedGroup ?: defaultFamilyGroup)
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -780,6 +786,40 @@ fun WhitelistMemberDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     modifier = Modifier.fillMaxWidth().testTag("whitelist_spotify_email_input"),
                 )
+                Text(
+                    text = "Spotify Family Group",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = familyGroup == AtaPotifyConstants.GROUP_1,
+                        onClick = { familyGroup = AtaPotifyConstants.GROUP_1 },
+                        label = { Text("Family 1") },
+                        modifier = Modifier.weight(1f).testTag("whitelist_group_1_chip"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = EmeraldContainer,
+                            selectedLabelColor = SpotifyEmerald,
+                        ),
+                    )
+                    FilterChip(
+                        selected = familyGroup == AtaPotifyConstants.GROUP_2,
+                        onClick = { familyGroup = AtaPotifyConstants.GROUP_2 },
+                        label = { Text("Family 2") },
+                        modifier = Modifier.weight(1f).testTag("whitelist_group_2_chip"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = Color(0xFF0E2A38),
+                            selectedLabelColor = Color(0xFF38BDF8),
+                        ),
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -799,7 +839,7 @@ fun WhitelistMemberDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onSave(email, name, phone, spotifyEmail, active) },
+                onClick = { onSave(email, name, phone, spotifyEmail, active, familyGroup) },
                 enabled = !isBusy && name.isNotBlank() && email.contains("@"),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = SpotifyEmerald,
@@ -860,6 +900,7 @@ fun SpotifySetupHintDialog(onDismiss: () -> Unit) {
 fun EditPaymentDialog(
     member: MemberPaymentStatus,
     monthLabel: String,
+    initialFamilyGroup: String = member.normalizedGroup,
     isBusy: Boolean,
     onSave: (
         displayName: String,
@@ -867,6 +908,7 @@ fun EditPaymentDialog(
         amountLkr: Long,
         clearReceipt: Boolean,
         resetReminders: Boolean,
+        familyGroup: String,
     ) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -875,6 +917,9 @@ fun EditPaymentDialog(
     var amountText by remember(member) { mutableStateOf(member.amountLkr.toString()) }
     var clearReceipt by remember(member) { mutableStateOf(false) }
     var resetReminders by remember(member) { mutableStateOf(false) }
+    var familyGroup by remember(member, initialFamilyGroup) {
+        mutableStateOf(AtaPotifyConstants.normalizeFamilyGroup(initialFamilyGroup))
+    }
 
     val statusOptions = listOf(
         AtaPotifyConstants.STATUS_PENDING to stringResource(R.string.status_pending),
@@ -912,6 +957,40 @@ fun EditPaymentDialog(
                         .fillMaxWidth()
                         .testTag("edit_payment_amount_input"),
                 )
+                Text(
+                    text = "Family Group",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = familyGroup == AtaPotifyConstants.GROUP_1,
+                        onClick = { familyGroup = AtaPotifyConstants.GROUP_1 },
+                        label = { Text("Family 1") },
+                        modifier = Modifier.weight(1f).testTag("edit_payment_group_1"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = EmeraldContainer,
+                            selectedLabelColor = SpotifyEmerald,
+                        ),
+                    )
+                    FilterChip(
+                        selected = familyGroup == AtaPotifyConstants.GROUP_2,
+                        onClick = { familyGroup = AtaPotifyConstants.GROUP_2 },
+                        label = { Text("Family 2") },
+                        modifier = Modifier.weight(1f).testTag("edit_payment_group_2"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = Color(0xFF0E2A38),
+                            selectedLabelColor = Color(0xFF38BDF8),
+                        ),
+                    )
+                }
                 Text(
                     text = "Payment Status",
                     style = MaterialTheme.typography.labelMedium,
@@ -988,7 +1067,7 @@ fun EditPaymentDialog(
         confirmButton = {
             val amount = amountText.toLongOrNull() ?: 0L
             Button(
-                onClick = { onSave(displayName, status, amount, clearReceipt, resetReminders) },
+                onClick = { onSave(displayName, status, amount, clearReceipt, resetReminders, familyGroup) },
                 enabled = !isBusy && displayName.isNotBlank() && amount in 1..100_000,
                 modifier = Modifier.testTag("edit_payment_save_button"),
                 colors = ButtonDefaults.buttonColors(
@@ -1015,7 +1094,7 @@ fun AddMemberToMonthDialog(
     whitelist: List<WhitelistMember>,
     adminDisplayName: String,
     isBusy: Boolean,
-    onAdd: (email: String, displayName: String, amountLkr: Long) -> Unit,
+    onAdd: (email: String, displayName: String, amountLkr: Long, familyGroup: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val existingKeys = remember(existingMembers) {
@@ -1026,10 +1105,10 @@ fun AddMemberToMonthDialog(
     val quickPickOptions = remember(whitelist, existingKeys, adminDisplayName) {
         buildList {
             if (adminKey !in existingKeys) {
-                add(AtaPotifyConstants.ADMIN_EMAIL to "${adminDisplayName.ifBlank { "Admin" }} (Admin)")
+                add(Triple(AtaPotifyConstants.ADMIN_EMAIL, "${adminDisplayName.ifBlank { "Admin" }} (Admin)", AtaPotifyConstants.GROUP_1))
             }
             whitelist.filter { it.memberKey !in existingKeys }.forEach { w ->
-                add(w.email to w.displayName)
+                add(Triple(w.email, w.displayName, w.normalizedGroup))
             }
         }
     }
@@ -1037,6 +1116,7 @@ fun AddMemberToMonthDialog(
     var email by remember(month.monthId) { mutableStateOf("") }
     var displayName by remember(month.monthId) { mutableStateOf("") }
     var amountText by remember(month.monthId) { mutableStateOf(month.amountLkr.toString()) }
+    var familyGroup by remember(month.monthId) { mutableStateOf(AtaPotifyConstants.GROUP_1) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1066,13 +1146,14 @@ fun AddMemberToMonthDialog(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        quickPickOptions.forEach { (optEmail, optLabel) ->
+                        quickPickOptions.forEach { (optEmail, optLabel, optGroup) ->
                             val cleanName = optLabel.removeSuffix(" (Admin)")
                             FilterChip(
                                 selected = email.equals(optEmail, ignoreCase = true),
                                 onClick = {
                                     email = optEmail
                                     displayName = cleanName
+                                    familyGroup = optGroup
                                 },
                                 label = { Text(optLabel) },
                                 colors = FilterChipDefaults.filterChipColors(
@@ -1114,12 +1195,41 @@ fun AddMemberToMonthDialog(
                         .fillMaxWidth()
                         .testTag("add_to_month_amount_input"),
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = familyGroup == AtaPotifyConstants.GROUP_1,
+                        onClick = { familyGroup = AtaPotifyConstants.GROUP_1 },
+                        label = { Text("Family 1") },
+                        modifier = Modifier.weight(1f),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = EmeraldContainer,
+                            selectedLabelColor = SpotifyEmerald,
+                        ),
+                    )
+                    FilterChip(
+                        selected = familyGroup == AtaPotifyConstants.GROUP_2,
+                        onClick = { familyGroup = AtaPotifyConstants.GROUP_2 },
+                        label = { Text("Family 2") },
+                        modifier = Modifier.weight(1f),
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = SurfaceElevated,
+                            labelColor = TextSecondary,
+                            selectedContainerColor = Color(0xFF0E2A38),
+                            selectedLabelColor = Color(0xFF38BDF8),
+                        ),
+                    )
+                }
             }
         },
         confirmButton = {
             val amount = amountText.toLongOrNull() ?: 0L
             Button(
-                onClick = { onAdd(email, displayName, amount) },
+                onClick = { onAdd(email, displayName, amount, familyGroup) },
                 enabled = !isBusy && displayName.isNotBlank() && email.contains("@") && amount in 1..100_000,
                 modifier = Modifier.testTag("add_to_month_confirm_button"),
                 colors = ButtonDefaults.buttonColors(
