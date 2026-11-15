@@ -1,4 +1,5 @@
-### What's New in v1.4.0
-- **Family Group 1 & Family Group 2 Support**: Manage two 6-slot Spotify Family groups in one app with live `X/6` slot capacity counters, 1-tap group assignment on pending requests and roster cards, `Fam 1` / `Fam 2` member badges, and an animated **All Groups / Family 1 / Family 2** switcher across Board, History, Leaderboard, and WhatsApp exports.
-- **Multi-Slide Pinned Announcements Carousel**: Admin can queue up to 8 pinned announcement slides (`Add Slide`, individual slide removal, `Clear All`). Slides auto-rotate every 5 seconds on the Board with a live progress bar, vertical slide transitions, `1/N` counter pill, dot indicators, and tap-to-advance.
-- **Smart Group Auto-Defaulting**: Pending join requests automatically suggest **Family 2** once **Family 1** reaches 6 active members, and switching a member's group syncs both the whitelist roster and the active billing month.
+### What's New in v1.4.1
+- **Member Groups Tab (`My Family Group`)**: Assigned members now see their own **Groups** tab with their Spotify Home Address (1-tap Copy), Family Manager name & contact, Spotify Invite Link (Open / Copy), join notes, renewal cadence, monthly split, bank transfer details, and group roster.
+- **Custom Family Groups & Rich Setup Info**: Admins can create custom family groups (names, colors, split amounts, start dates & renewal cadence, max slots), transfer members smoothly between groups, and manage member-facing Spotify Family info.
+- **Cash in Hand & Partial Payments**: Admins can record partial payments (`paid / remaining LKR`), mark **Cash in Hand (Paid)** from the member action menu, and see accurate collected vs. remaining totals in summaries and WhatsApp exports.
+- **Refined Member Card Layout**: Compact family group badges are positioned neatly beneath member avatars for cleaner visual hierarchy.
