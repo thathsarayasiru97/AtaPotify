@@ -41,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
@@ -115,6 +116,7 @@ import com.example.ui.screens.AwaitingApprovalScreen
 import com.example.ui.screens.BoardScreen
 import com.example.ui.screens.ConfirmDeleteDialog
 import com.example.ui.screens.EditPaymentDialog
+import com.example.ui.screens.FamilyGroupsScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.LoadingGateScreen
 import com.example.ui.screens.ProfileEditorSheet
@@ -151,6 +153,7 @@ private enum class AppTab(
 ) {
     BOARD("board", R.string.nav_board, Icons.Default.Dashboard),
     HISTORY("history", R.string.nav_history, Icons.Default.History),
+    GROUPS("groups", R.string.nav_groups, Icons.Default.Groups),
     ADMIN("admin", R.string.nav_admin, Icons.Default.AdminPanelSettings),
 }
 
@@ -350,6 +353,7 @@ private fun MainAppScaffold(
 
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val planConfig by viewModel.planConfig.collectAsStateWithLifecycle()
+    val familyGroups by viewModel.familyGroups.collectAsStateWithLifecycle()
     val whitelist by viewModel.whitelist.collectAsStateWithLifecycle()
     val pendingAccessRequests by viewModel.pendingAccessRequests.collectAsStateWithLifecycle()
     val paymentMonths by viewModel.paymentMonths.collectAsStateWithLifecycle()
@@ -430,12 +434,12 @@ private fun MainAppScaffold(
     }
 
     val tabs = remember(session.isAdmin) {
-        if (session.isAdmin) listOf(AppTab.BOARD, AppTab.HISTORY, AppTab.ADMIN)
+        if (session.isAdmin) listOf(AppTab.BOARD, AppTab.HISTORY, AppTab.GROUPS, AppTab.ADMIN)
         else listOf(AppTab.BOARD, AppTab.HISTORY)
     }
 
     LaunchedEffect(session.isAdmin) {
-        if (!session.isAdmin && selectedTab == AppTab.ADMIN) {
+        if (!session.isAdmin && (selectedTab == AppTab.ADMIN || selectedTab == AppTab.GROUPS)) {
             selectedTab = AppTab.BOARD
         }
     }
@@ -507,12 +511,15 @@ private fun MainAppScaffold(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     val selfRoleLabel = if (session.isAdmin) {
-                                        "Admin • Family 1 & 2"
+                                        "Admin • ${familyGroups.size} Group(s)"
                                     } else {
-                                        val selfGroup = currentMonthMembers
+                                        val wlGroup = whitelist
+                                            .firstOrNull { it.memberKey == session.memberKey }
+                                            ?.normalizedGroup
+                                        val selfGroup = wlGroup ?: currentMonthMembers
                                             .firstOrNull { it.memberKey == session.memberKey }
                                             ?.normalizedGroup ?: session.familyGroup
-                                        AtaPotifyConstants.familyGroupLabel(selfGroup)
+                                        AtaPotifyConstants.familyGroupLabel(selfGroup, familyGroups)
                                     }
                                     Text(
                                         text = "$effectiveDisplayName • $selfRoleLabel",
@@ -688,6 +695,7 @@ private fun MainAppScaffold(
                             members = currentMonthMembers,
                             stats = currentMonthStats,
                             whitelist = whitelist,
+                            familyGroups = familyGroups,
                             overdueReminders = overdueReminders,
                             defaultAmountLkr = planConfig.monthlyAmountLkr,
                             planConfig = planConfig,
@@ -759,10 +767,16 @@ private fun MainAppScaffold(
                             onClearAnnouncement = { viewModel.updatePinnedAnnouncements(emptyList()) },
                             onShareMonthlySummary = {
                                 currentMonth?.let { month ->
-                                    val filteredMembers = when (selectedGroupFilter) {
-                                        AtaPotifyConstants.GROUP_1, AtaPotifyConstants.GROUP_2 ->
-                                            currentMonthMembers.filter { it.normalizedGroup == selectedGroupFilter }
-                                        else -> currentMonthMembers
+                                    val groupByKey = buildMap {
+                                        currentMonthMembers.forEach { put(it.memberKey, it.normalizedGroup) }
+                                        whitelist.forEach { put(it.memberKey, it.normalizedGroup) }
+                                    }
+                                    val filteredMembers = if (selectedGroupFilter == AtaPotifyConstants.GROUP_ALL) {
+                                        currentMonthMembers
+                                    } else {
+                                        currentMonthMembers.filter {
+                                            (groupByKey[it.memberKey] ?: it.normalizedGroup) == selectedGroupFilter
+                                        }
                                     }
                                     viewModel.shareMonthlySummaryToWhatsApp(
                                         context = context,
@@ -788,6 +802,7 @@ private fun MainAppScaffold(
                             members = historyMonthMembers,
                             stats = historyMonthStats,
                             whitelist = whitelist,
+                            familyGroups = familyGroups,
                             paymentStreaks = paymentStreaks,
                             allTimeWrapped = allTimeWrapped,
                             selectedGroupFilter = selectedGroupFilter,
@@ -801,10 +816,16 @@ private fun MainAppScaffold(
                                 deletingMonthContext = Triple(month, historyMonthMembers, historyMonthStats)
                             },
                             onShareMonthSummary = { month ->
-                                val filteredMembers = when (selectedGroupFilter) {
-                                    AtaPotifyConstants.GROUP_1, AtaPotifyConstants.GROUP_2 ->
-                                        historyMonthMembers.filter { it.normalizedGroup == selectedGroupFilter }
-                                    else -> historyMonthMembers
+                                val groupByKey = buildMap {
+                                    historyMonthMembers.forEach { put(it.memberKey, it.normalizedGroup) }
+                                    whitelist.forEach { if (!containsKey(it.memberKey)) put(it.memberKey, it.normalizedGroup) }
+                                }
+                                val filteredMembers = if (selectedGroupFilter == AtaPotifyConstants.GROUP_ALL) {
+                                    historyMonthMembers
+                                } else {
+                                    historyMonthMembers.filter {
+                                        (groupByKey[it.memberKey] ?: it.normalizedGroup) == selectedGroupFilter
+                                    }
                                 }
                                 viewModel.shareMonthlySummaryToWhatsApp(
                                     context = context,
@@ -862,10 +883,58 @@ private fun MainAppScaffold(
                             onOpenSpotifyQuery = { query -> viewModel.openInSpotifySearch(context, query) },
                         )
 
+                        AppTab.GROUPS -> FamilyGroupsScreen(
+                            familyGroups = familyGroups,
+                            whitelist = whitelist,
+                            currentMonth = currentMonth,
+                            defaultAmountLkr = planConfig.monthlyAmountLkr,
+                            isBusy = isBusy,
+                            onCreateOrUpdateGroup = { groupId, name, startDate, amountLkr, colorHex, maxSlots, updateActiveMonth, onDone ->
+                                viewModel.saveFamilyGroup(
+                                    groupId = groupId,
+                                    name = name,
+                                    startDate = startDate,
+                                    amountLkr = amountLkr,
+                                    colorHex = colorHex,
+                                    maxSlots = maxSlots,
+                                    alsoUpdateActiveMonthMembers = updateActiveMonth,
+                                    onDone = onDone,
+                                )
+                            },
+                            onDeleteGroup = { group, reassignToGroupId, onDone ->
+                                viewModel.deleteFamilyGroup(
+                                    group = group,
+                                    reassignToGroupId = reassignToGroupId,
+                                    onDone = onDone,
+                                )
+                            },
+                            onTransferMember = { memberKey, memberName, targetGroupId, updateMonthAmount, onDone ->
+                                viewModel.transferMemberToGroup(
+                                    memberKey = memberKey,
+                                    memberName = memberName,
+                                    targetGroupId = targetGroupId,
+                                    updateActiveMonthAmount = updateMonthAmount,
+                                    onDone = onDone,
+                                )
+                            },
+                            onAddNewMemberToGroup = { email, displayName, phone, spotifyEmail, targetGroupId, onDone ->
+                                viewModel.upsertWhitelistMember(
+                                    email = email,
+                                    displayName = displayName,
+                                    phone = phone,
+                                    active = true,
+                                    spotifyEmail = spotifyEmail,
+                                    familyGroup = targetGroupId,
+                                    onDone = onDone,
+                                )
+                            },
+                        )
+
                         AppTab.ADMIN -> AdminScreen(
                             planConfig = planConfig,
                             currentMonth = currentMonth,
                             whitelist = whitelist,
+                            familyGroups = familyGroups,
                             pendingRequests = pendingAccessRequests,
                             isBusy = isBusy,
                             onApproveRequest = { req, group -> viewModel.approveAccessRequest(req, group) },
@@ -909,13 +978,11 @@ private fun MainAppScaffold(
                                 )
                             },
                             onSwitchMemberGroup = { member, targetGroup ->
-                                viewModel.upsertWhitelistMember(
-                                    email = member.email,
-                                    displayName = member.displayName,
-                                    phone = member.phone,
-                                    active = member.active,
-                                    spotifyEmail = member.spotifyEmail,
-                                    familyGroup = targetGroup,
+                                viewModel.transferMemberToGroup(
+                                    memberKey = member.memberKey,
+                                    memberName = member.displayName,
+                                    targetGroupId = targetGroup,
+                                    updateActiveMonthAmount = true,
                                     onDone = {},
                                 )
                             },
@@ -1015,18 +1082,20 @@ private fun MainAppScaffold(
         val suggested = remember(paymentMonths) {
             AtaPotifyConstants.nextSuggestedMonthId(paymentMonths.map { it.monthId })
         }
-        val g1Active = remember(whitelist) {
-            whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_1 }
-        }
-        val g2Active = remember(whitelist) {
-            whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_2 }
+        val activeCountByGroup = remember(whitelist, familyGroups) {
+            val counts = mutableMapOf<String, Int>()
+            familyGroups.forEach { counts[it.effectiveId] = 0 }
+            whitelist.filter { it.active }.forEach { wl ->
+                counts[wl.normalizedGroup] = (counts[wl.normalizedGroup] ?: 0) + 1
+            }
+            counts
         }
         StartNewMonthDialog(
             suggestedMonthId = suggested,
             defaultAmountLkr = planConfig.monthlyAmountLkr,
             activeMemberCount = whitelist.count { it.active },
-            group1ActiveCount = g1Active,
-            group2ActiveCount = g2Active,
+            familyGroups = familyGroups,
+            activeCountByGroup = activeCountByGroup,
             isBusy = isBusy,
             onConfirm = { monthId, label, amountLkr ->
                 viewModel.startNewMonth(monthId, label, amountLkr) {
@@ -1038,12 +1107,15 @@ private fun MainAppScaffold(
     }
 
     if (showWhitelistDialog && session.isAdmin) {
-        val defaultGroup = remember(whitelist) {
-            val g1Count = whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_1 }
-            if (g1Count >= AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS) AtaPotifyConstants.GROUP_2 else AtaPotifyConstants.GROUP_1
+        val defaultGroup = remember(whitelist, familyGroups) {
+            val counts = whitelist.filter { it.active }.groupingBy { it.normalizedGroup }.eachCount()
+            familyGroups.firstOrNull { (counts[it.effectiveId] ?: 0) < it.maxSlots }?.effectiveId
+                ?: familyGroups.firstOrNull()?.effectiveId
+                ?: AtaPotifyConstants.GROUP_1
         }
         WhitelistMemberDialog(
             editingMember = editingWhitelistMember,
+            familyGroups = familyGroups,
             defaultFamilyGroup = defaultGroup,
             isBusy = isBusy,
             onSave = { email, name, phone, spotifyEmail, active, familyGroup ->
@@ -1092,6 +1164,7 @@ private fun MainAppScaffold(
             EditPaymentDialog(
                 member = member,
                 monthLabel = month.displayLabel,
+                familyGroups = familyGroups,
                 initialFamilyGroup = wlGroup ?: member.normalizedGroup,
                 isBusy = isBusy,
                 onSave = { displayName, status, amountLkr, clearReceipt, resetReminders, familyGroup ->
@@ -1118,6 +1191,7 @@ private fun MainAppScaffold(
                 month = month,
                 existingMembers = existingMembers,
                 whitelist = whitelist,
+                familyGroups = familyGroups,
                 adminDisplayName = adminDisplayName,
                 isBusy = isBusy,
                 onAdd = { email, displayName, amountLkr, familyGroup ->

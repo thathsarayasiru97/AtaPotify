@@ -320,6 +320,188 @@ class AtaPotifyRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
+    fun adminCanCreateCustomizeTransferAndDeleteFamilyGroups() = runBlocking {
+        signInTestUser(AtaPotifyConstants.ADMIN_EMAIL)
+        val authRepo = AuthRepository(firestore, auth)
+        val paymentRepo = PaymentRepository(firestore, auth)
+
+        step("admin resolveAccess") {
+            authRepo.resolveAccessAndSyncProfile(auth.currentUser!!).getOrThrow()
+        }
+        step("admin seed default family groups") {
+            paymentRepo.ensureDefaultFamilyGroupsIfAdmin(450L).getOrThrow()
+        }
+
+        val initialGroups = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeFamilyGroups().first { it.size >= 2 }
+        }
+        assertTrue(initialGroups.any { it.effectiveId == AtaPotifyConstants.GROUP_1 })
+        assertTrue(initialGroups.any { it.effectiveId == AtaPotifyConstants.GROUP_2 })
+
+        val customGroupId = step("admin create custom family group") {
+            paymentRepo.saveFamilyGroup(
+                groupId = null,
+                name = "Uni Squad",
+                startDate = "2026-11-15",
+                amountLkr = 520L,
+                colorHex = "#A855F7",
+                maxSlots = 6L,
+                existingGroups = initialGroups,
+                alsoUpdateActiveMonthMembers = false,
+                activeMonth = null,
+                activeMonthMembers = emptyList(),
+            ).getOrThrow()
+        }
+
+        val groupsWithCustom = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeFamilyGroups().first { list -> list.any { it.effectiveId == customGroupId } }
+        }
+        val customGroup = groupsWithCustom.first { it.effectiveId == customGroupId }
+        assertEquals("Uni Squad", customGroup.name)
+        assertEquals("2026-11-15", customGroup.startDate)
+        assertEquals(520L, customGroup.amountLkr)
+        assertEquals("#A855F7", customGroup.colorHex)
+
+        val friendEmail = "squad_${UUID.randomUUID().toString().take(6)}@gmail.com"
+        val friendKey = AtaPotifyConstants.memberKeyForEmail(friendEmail)
+        val monthId = uniqueMonthId()
+
+        step("admin add member into custom group") {
+            paymentRepo.upsertWhitelistMember(
+                email = friendEmail,
+                displayName = "Kavindu",
+                phone = "94771112233",
+                active = true,
+                allCurrentWhitelist = emptyList(),
+                activeMonth = null,
+                activeMonthMembers = emptyList(),
+                familyGroup = customGroupId,
+                groupAmountLkr = 520L,
+            ).getOrThrow()
+        }
+
+        val whitelist = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeWhitelist().first { list -> list.any { it.memberKey == friendKey } }
+        }
+        val wlMember = whitelist.first { it.memberKey == friendKey }
+        assertEquals(customGroupId, wlMember.normalizedGroup)
+
+        step("admin startNewMonth with per-group pricing") {
+            paymentRepo.startNewMonth(
+                monthId = monthId,
+                displayLabel = "Custom Group Month",
+                amountLkr = 450L,
+                activeMembers = listOf(wlMember),
+                familyGroups = groupsWithCustom,
+            ).getOrThrow()
+        }
+
+        val activeMonth = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observePaymentMonths(AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.monthId == monthId } }
+                .first { it.monthId == monthId }
+        }
+        val initialMonthMembers = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey } }
+        }
+        assertEquals(520L, initialMonthMembers.first { it.memberKey == friendKey }.amountLkr)
+
+        step("admin update group price split & color") {
+            paymentRepo.saveFamilyGroup(
+                groupId = customGroupId,
+                name = "Uni Squad",
+                startDate = "2026-11-18",
+                amountLkr = 550L,
+                colorHex = "#FB7185",
+                maxSlots = 6L,
+                existingGroups = groupsWithCustom,
+                alsoUpdateActiveMonthMembers = true,
+                activeMonth = activeMonth,
+                activeMonthMembers = initialMonthMembers,
+            ).getOrThrow()
+        }
+
+        val updatedMonthMembers = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.amountLkr == 550L } }
+        }
+        assertEquals(550L, updatedMonthMembers.first { it.memberKey == friendKey }.amountLkr)
+
+        step("admin transfer member to group_1") {
+            paymentRepo.transferMemberToGroup(
+                memberKey = friendKey,
+                targetGroupId = AtaPotifyConstants.GROUP_1,
+                targetGroupAmountLkr = 450L,
+                updateActiveMonthAmount = true,
+                activeMonth = activeMonth,
+                activeMonthMembers = updatedMonthMembers,
+            ).getOrThrow()
+        }
+
+        val afterTransferWl = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeWhitelist().first { list ->
+                list.any { it.memberKey == friendKey && it.normalizedGroup == AtaPotifyConstants.GROUP_1 }
+            }
+        }
+        assertEquals(AtaPotifyConstants.GROUP_1, afterTransferWl.first { it.memberKey == friendKey }.normalizedGroup)
+
+        val monthMembersAfterTransfer = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.normalizedGroup == AtaPotifyConstants.GROUP_1 } }
+        }
+        step("admin move member back before deletion test") {
+            paymentRepo.transferMemberToGroup(
+                memberKey = friendKey,
+                targetGroupId = customGroupId,
+                targetGroupAmountLkr = 550L,
+                updateActiveMonthAmount = false,
+                activeMonth = activeMonth,
+                activeMonthMembers = monthMembersAfterTransfer,
+            ).getOrThrow()
+        }
+        val wlBeforeDelete = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeWhitelist().first { list ->
+                list.any { it.memberKey == friendKey && it.normalizedGroup == customGroupId }
+            }
+        }
+        val membersBeforeDelete = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeMonthMembers(monthId, AtaPotifyConstants.ADMIN_EMAIL, isAdmin = true)
+                .first { list -> list.any { it.memberKey == friendKey && it.normalizedGroup == customGroupId } }
+        }
+
+        step("admin delete custom group with reassignment to group_2") {
+            paymentRepo.deleteFamilyGroup(
+                groupId = customGroupId,
+                reassignToGroupId = AtaPotifyConstants.GROUP_2,
+                whitelist = wlBeforeDelete,
+                activeMonth = activeMonth,
+                activeMonthMembers = membersBeforeDelete,
+            ).getOrThrow()
+        }
+
+        val wlAfterDelete = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeWhitelist().first { list ->
+                list.any { it.memberKey == friendKey && it.normalizedGroup == AtaPotifyConstants.GROUP_2 }
+            }
+        }
+        assertEquals(AtaPotifyConstants.GROUP_2, wlAfterDelete.first { it.memberKey == friendKey }.normalizedGroup)
+
+        val groupsAfterDelete = withTimeout(FLOW_TIMEOUT_MS) {
+            paymentRepo.observeFamilyGroups().first { list -> list.none { it.effectiveId == customGroupId } }
+        }
+        assertTrue(groupsAfterDelete.none { it.effectiveId == customGroupId })
+
+        step("cleanup test month") {
+            paymentRepo.deleteBillingMonth(
+                monthId = monthId,
+                memberKeys = listOf(friendKey),
+                statKeys = emptyList(),
+            ).getOrThrow()
+        }
+    }
+
+    @Test
     fun unauthenticatedCallerIsRejectedWithPermissionDenied() = runBlocking {
         auth.signOut()
         val paymentRepo = PaymentRepository(firestore, auth)

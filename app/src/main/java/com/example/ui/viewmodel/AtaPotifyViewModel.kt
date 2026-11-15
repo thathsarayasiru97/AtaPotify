@@ -10,6 +10,7 @@ import com.example.data.error.unwrapFirestoreException
 import com.example.data.model.AccessRequest
 import com.example.data.model.AllTimeWrappedSummary
 import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.FamilyGroup
 import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
 import com.example.data.model.PaymentMonth
@@ -22,6 +23,7 @@ import com.example.data.model.buildWhatsAppMonthlySummaryText
 import com.example.data.model.calculateAllTimeWrappedSummary
 import com.example.data.model.calculateLongestStreakStanding
 import com.example.data.model.calculatePaymentStreaks
+import com.example.data.model.resolveEffectiveFamilyGroups
 import com.example.data.repository.AccessResolution
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.PaymentRepository
@@ -238,6 +240,14 @@ class AtaPotifyViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), PlanConfig())
 
+    private val rawFamilyGroups: StateFlow<List<FamilyGroup>> = paymentRepository.observeFamilyGroups()
+        .catch { error ->
+            val fsErr = error.unwrapFirestoreException()
+            if (fsErr == null && error is CancellationException) throw error
+            Log.w(TAG, "Family groups unavailable yet: ${(fsErr ?: error).message}")
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
     val whitelist: StateFlow<List<WhitelistMember>> = if (session.isAdmin) {
         paymentRepository.observeWhitelist()
             .catch { error ->
@@ -295,6 +305,24 @@ class AtaPotifyViewModel(
                 }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val familyGroups: StateFlow<List<FamilyGroup>> = combine(
+        rawFamilyGroups,
+        planConfig,
+        whitelist,
+        currentMonthMembers,
+    ) { raw, cfg, wl, members ->
+        resolveEffectiveFamilyGroups(
+            rawGroups = raw,
+            defaultAmountLkr = cfg.monthlyAmountLkr,
+            whitelist = wl,
+            members = members,
+        )
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+        resolveEffectiveFamilyGroups(emptyList()),
+    )
 
     val currentMonthStats: StateFlow<List<ListeningStat>> = currentMonth
         .flatMapLatest { month ->
@@ -358,6 +386,7 @@ class AtaPotifyViewModel(
         if (session.isAdmin) {
             viewModelScope.launch {
                 paymentRepository.ensureDefaultPlanConfigIfAdmin()
+                paymentRepository.ensureDefaultFamilyGroupsIfAdmin(planConfig.value.monthlyAmountLkr)
             }
             viewModelScope.launch {
                 overdueReminders.collect { list ->
@@ -566,10 +595,10 @@ class AtaPotifyViewModel(
     }
 
     fun selectGroupFilter(group: String) {
-        _selectedGroupFilter.value = when (group) {
-            AtaPotifyConstants.GROUP_1 -> AtaPotifyConstants.GROUP_1
-            AtaPotifyConstants.GROUP_2 -> AtaPotifyConstants.GROUP_2
-            else -> AtaPotifyConstants.GROUP_ALL
+        _selectedGroupFilter.value = if (group == AtaPotifyConstants.GROUP_ALL || group.isBlank()) {
+            AtaPotifyConstants.GROUP_ALL
+        } else {
+            AtaPotifyConstants.normalizeFamilyGroup(group)
         }
     }
 
@@ -962,6 +991,7 @@ class AtaPotifyViewModel(
             stats = stats,
             planConfig = planConfig.value,
             groupFilter = groupFilter,
+            familyGroups = familyGroups.value,
         )
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -991,6 +1021,7 @@ class AtaPotifyViewModel(
                 displayLabel = displayLabel.trim().ifBlank { AtaPotifyConstants.monthLabelFromId(monthId.trim()) },
                 amountLkr = amountLkr,
                 activeMembers = activeMembers,
+                familyGroups = familyGroups.value,
             )
             _isBusy.value = false
             res.fold(
@@ -1156,6 +1187,10 @@ class AtaPotifyViewModel(
     ) {
         viewModelScope.launch {
             _isBusy.value = true
+            val resolvedGroupId = familyGroup?.let { AtaPotifyConstants.normalizeFamilyGroup(it) }
+            val groupRate = resolvedGroupId?.let { id ->
+                familyGroups.value.firstOrNull { it.effectiveId == id }?.amountLkr
+            }
             val res = paymentRepository.upsertWhitelistMember(
                 email = email,
                 displayName = displayName,
@@ -1166,11 +1201,14 @@ class AtaPotifyViewModel(
                 activeMonthMembers = currentMonthMembers.value,
                 spotifyEmail = spotifyEmail,
                 familyGroup = familyGroup,
+                groupAmountLkr = groupRate,
             )
             _isBusy.value = false
             res.fold(
                 onSuccess = {
-                    val groupLabel = familyGroup?.let { " (${AtaPotifyConstants.familyGroupLabel(it)})" }.orEmpty()
+                    val groupLabel = familyGroup?.let {
+                        " (${AtaPotifyConstants.familyGroupLabel(it, familyGroups.value)})"
+                    }.orEmpty()
                     _snackbarEvents.tryEmit("Saved $displayName$groupLabel")
                     onDone()
                 },
@@ -1199,21 +1237,128 @@ class AtaPotifyViewModel(
     ) {
         viewModelScope.launch {
             _isBusy.value = true
+            val resolvedGroupId = AtaPotifyConstants.normalizeFamilyGroup(familyGroup)
+            val groupRate = familyGroups.value.firstOrNull { it.effectiveId == resolvedGroupId }?.amountLkr
             val res = paymentRepository.approveAccessRequest(
                 request = request,
                 allCurrentWhitelist = whitelist.value,
                 activeMonth = currentMonth.value,
                 activeMonthMembers = currentMonthMembers.value,
-                familyGroup = familyGroup,
+                familyGroup = resolvedGroupId,
+                groupAmountLkr = groupRate,
             )
             _isBusy.value = false
             res.fold(
                 onSuccess = {
-                    val groupLabel = AtaPotifyConstants.familyGroupLabel(familyGroup)
+                    val groupLabel = AtaPotifyConstants.familyGroupLabel(resolvedGroupId, familyGroups.value)
                     _snackbarEvents.tryEmit("Approved ${request.displayName} into $groupLabel")
                 },
                 onFailure = { e ->
                     _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to approve request")
+                },
+            )
+        }
+    }
+
+    fun saveFamilyGroup(
+        groupId: String?,
+        name: String,
+        startDate: String,
+        amountLkr: Long,
+        colorHex: String,
+        maxSlots: Long,
+        alsoUpdateActiveMonthMembers: Boolean,
+        onDone: () -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.saveFamilyGroup(
+                groupId = groupId,
+                name = name,
+                startDate = startDate,
+                amountLkr = amountLkr,
+                colorHex = colorHex,
+                maxSlots = maxSlots,
+                existingGroups = familyGroups.value,
+                alsoUpdateActiveMonthMembers = alsoUpdateActiveMonthMembers,
+                activeMonth = currentMonth.value,
+                activeMonthMembers = currentMonthMembers.value,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    val action = if (groupId.isNullOrBlank()) "Created" else "Updated"
+                    _snackbarEvents.tryEmit("$action ${name.trim()} (LKR $amountLkr)")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to save family group")
+                },
+            )
+        }
+    }
+
+    fun deleteFamilyGroup(
+        group: FamilyGroup,
+        reassignToGroupId: String?,
+        onDone: () -> Unit = {},
+    ) {
+        if (familyGroups.value.size <= 1) {
+            _snackbarEvents.tryEmit("At least one Family Group must remain.")
+            return
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = paymentRepository.deleteFamilyGroup(
+                groupId = group.effectiveId,
+                reassignToGroupId = reassignToGroupId,
+                whitelist = whitelist.value,
+                activeMonth = currentMonth.value,
+                activeMonthMembers = currentMonthMembers.value,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    if (_selectedGroupFilter.value == group.effectiveId) {
+                        _selectedGroupFilter.value = AtaPotifyConstants.GROUP_ALL
+                    }
+                    _snackbarEvents.tryEmit("Deleted ${group.name}")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to delete family group")
+                },
+            )
+        }
+    }
+
+    fun transferMemberToGroup(
+        memberKey: String,
+        memberName: String,
+        targetGroupId: String,
+        updateActiveMonthAmount: Boolean = true,
+        onDone: () -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val targetGroup = familyGroups.value.firstOrNull { it.effectiveId == targetGroupId }
+            val res = paymentRepository.transferMemberToGroup(
+                memberKey = memberKey,
+                targetGroupId = targetGroupId,
+                targetGroupAmountLkr = targetGroup?.amountLkr,
+                updateActiveMonthAmount = updateActiveMonthAmount,
+                activeMonth = currentMonth.value,
+                activeMonthMembers = currentMonthMembers.value,
+            )
+            _isBusy.value = false
+            res.fold(
+                onSuccess = {
+                    val targetLabel = AtaPotifyConstants.familyGroupLabel(targetGroupId, familyGroups.value)
+                    _snackbarEvents.tryEmit("Moved $memberName to $targetLabel")
+                    onDone()
+                },
+                onFailure = { e ->
+                    _snackbarEvents.tryEmit(e.localizedMessage ?: "Failed to move member")
                 },
             )
         }

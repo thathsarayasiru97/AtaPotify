@@ -25,6 +25,7 @@
     <string name="btn_resubmit_request">Update &amp; Re-request</string>
     <string name="nav_board">Board</string>
     <string name="nav_history">History</string>
+    <string name="nav_groups">Groups</string>
     <string name="nav_admin">Admin</string>
     <string name="status_paid">Paid</string>
     <string name="status_verifying">Verifying</string>

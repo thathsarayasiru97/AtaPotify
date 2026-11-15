@@ -31,20 +31,101 @@ object AtaPotifyConstants {
     const val GROUP_ALL = "all"
     const val GROUP_1 = "group_1"
     const val GROUP_2 = "group_2"
+    const val DEFAULT_GROUP_1_COLOR_HEX = "#1ED760"
+    const val DEFAULT_GROUP_2_COLOR_HEX = "#38BDF8"
     const val MAX_SPOTIFY_FAMILY_SLOTS = 6
     const val MAX_PINNED_ANNOUNCEMENTS = 8
 
-    fun normalizeFamilyGroup(raw: String?): String =
-        if (raw == GROUP_2) GROUP_2 else GROUP_1
+    private val VALID_GROUP_ID_REGEX = Regex("^[a-zA-Z0-9_\\-]{1,128}$")
 
-    fun familyGroupLabel(group: String): String = when (group) {
-        GROUP_2 -> "Family 2"
-        GROUP_1 -> "Family 1"
-        else -> "All Groups"
+    fun normalizeFamilyGroup(raw: String?): String {
+        val clean = raw?.trim().orEmpty()
+        return if (clean.isNotBlank() && clean != GROUP_ALL && VALID_GROUP_ID_REGEX.matches(clean)) {
+            clean
+        } else {
+            GROUP_1
+        }
     }
 
-    fun familyGroupShortBadge(group: String): String =
-        if (group == GROUP_2) "Fam 2" else "Fam 1"
+    fun isValidHexColor(raw: String): Boolean =
+        raw.trim().matches(Regex("^#[0-9A-Fa-f]{6}$"))
+
+    fun normalizeHexColor(raw: String?, fallback: String = DEFAULT_GROUP_1_COLOR_HEX): String {
+        val clean = raw?.trim().orEmpty()
+        return if (isValidHexColor(clean)) clean.uppercase(Locale.US) else fallback
+    }
+
+    fun generateGroupId(name: String, existingIds: Set<String>): String {
+        val slug = name.trim().lowercase(Locale.US)
+            .replace(Regex("[^a-z0-9]+"), "_")
+            .trim('_')
+            .take(24)
+            .ifBlank { "group" }
+        val base = "grp_$slug"
+        if (base !in existingIds) return base
+        var idx = 2
+        while ("${base}_$idx" in existingIds) idx++
+        return "${base}_$idx"
+    }
+
+    fun familyGroupLabel(group: String, groups: List<FamilyGroup> = emptyList()): String {
+        if (group == GROUP_ALL) return "All Groups"
+        groups.firstOrNull { it.effectiveId == group }?.name?.takeIf { it.isNotBlank() }?.let { return it }
+        return when (group) {
+            GROUP_2 -> "Family 2"
+            GROUP_1 -> "Family 1"
+            else -> group.removePrefix("grp_")
+                .replace('_', ' ')
+                .replace('-', ' ')
+                .trim()
+                .replaceFirstChar { it.uppercase() }
+                .ifBlank { "Family Group" }
+        }
+    }
+
+    fun familyGroupShortBadge(group: String, groups: List<FamilyGroup> = emptyList()): String {
+        val full = familyGroupLabel(group, groups)
+        return when {
+            group == GROUP_1 && full == "Family 1" -> "Fam 1"
+            group == GROUP_2 && full == "Family 2" -> "Fam 2"
+            full.startsWith("Family ", ignoreCase = true) && full.length <= 10 ->
+                "Fam " + full.substringAfter("Family ").trim()
+            full.length <= 11 -> full
+            else -> full.take(10).trimEnd() + "…"
+        }
+    }
+
+    fun familyGroupColorHex(groupId: String, groups: List<FamilyGroup> = emptyList()): String {
+        groups.firstOrNull { it.effectiveId == groupId }?.colorHex?.takeIf { isValidHexColor(it) }?.let { return it }
+        return if (groupId == GROUP_2) DEFAULT_GROUP_2_COLOR_HEX else DEFAULT_GROUP_1_COLOR_HEX
+    }
+
+    fun formatStartDateDisplay(startDateIso: String): String {
+        val clean = startDateIso.trim()
+        if (clean.isBlank()) return "Not set"
+        return runCatching {
+            val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }
+            val date = parser.parse(clean) ?: return clean
+            SimpleDateFormat("MMM d, yyyy", Locale.US).format(date)
+        }.getOrDefault(clean)
+    }
+
+    fun billingDaySummary(startDateIso: String): String {
+        val clean = startDateIso.trim()
+        if (!clean.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) return ""
+        val day = clean.substring(8, 10).toIntOrNull() ?: return ""
+        val suffix = when {
+            day in 11..13 -> "th"
+            day % 10 == 1 -> "st"
+            day % 10 == 2 -> "nd"
+            day % 10 == 3 -> "rd"
+            else -> "th"
+        }
+        return "Renews ${day}$suffix monthly"
+    }
+
+    fun todayIsoDate(date: Date = Date()): String =
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).format(date)
 
     fun normalizeEmail(email: String): String = email.trim().lowercase(Locale.US)
 
@@ -257,6 +338,110 @@ data class ListeningStat(
     val allowedEmails: List<String> = emptyList(),
     @ServerTimestamp val syncedAt: Timestamp? = null,
 )
+
+data class GroupColorPreset(
+    val name: String,
+    val hex: String,
+)
+
+val FAMILY_GROUP_COLOR_PRESETS = listOf(
+    GroupColorPreset("Emerald", "#1ED760"),
+    GroupColorPreset("Sky Cyan", "#38BDF8"),
+    GroupColorPreset("Violet", "#A78BFA"),
+    GroupColorPreset("Rose Pink", "#F472B6"),
+    GroupColorPreset("Amber Gold", "#FBBF24"),
+    GroupColorPreset("Coral Red", "#FB7185"),
+    GroupColorPreset("Teal", "#2DD4BF"),
+    GroupColorPreset("Indigo", "#818CF8"),
+    GroupColorPreset("Sunset", "#FB923C"),
+    GroupColorPreset("Mint", "#34D399"),
+)
+
+@IgnoreExtraProperties
+data class FamilyGroup(
+    @DocumentId val id: String = "",
+    val groupId: String = "",
+    val name: String = "",
+    val startDate: String = "",
+    val amountLkr: Long = AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
+    val colorHex: String = AtaPotifyConstants.DEFAULT_GROUP_1_COLOR_HEX,
+    val maxSlots: Long = AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS.toLong(),
+    val sortOrder: Long = 0L,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+) {
+    val effectiveId: String
+        get() = AtaPotifyConstants.normalizeFamilyGroup(groupId.ifBlank { id })
+}
+
+fun resolveEffectiveFamilyGroups(
+    rawGroups: List<FamilyGroup>,
+    defaultAmountLkr: Long = AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
+    whitelist: List<WhitelistMember> = emptyList(),
+    members: List<MemberPaymentStatus> = emptyList(),
+): List<FamilyGroup> {
+    val paletteCycle = listOf("#A78BFA", "#F472B6", "#FBBF24", "#2DD4BF", "#FB7185", "#818CF8")
+    if (rawGroups.isEmpty()) {
+        val referenced = (whitelist.map { it.normalizedGroup } + members.map { it.normalizedGroup }).toSet()
+        val list = mutableListOf(
+            FamilyGroup(
+                id = AtaPotifyConstants.GROUP_1,
+                groupId = AtaPotifyConstants.GROUP_1,
+                name = "Family 1",
+                startDate = "${AtaPotifyConstants.currentMonthId()}-01",
+                amountLkr = defaultAmountLkr,
+                colorHex = AtaPotifyConstants.DEFAULT_GROUP_1_COLOR_HEX,
+                maxSlots = AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS.toLong(),
+                sortOrder = 0L,
+            ),
+            FamilyGroup(
+                id = AtaPotifyConstants.GROUP_2,
+                groupId = AtaPotifyConstants.GROUP_2,
+                name = "Family 2",
+                startDate = "${AtaPotifyConstants.currentMonthId()}-01",
+                amountLkr = defaultAmountLkr,
+                colorHex = AtaPotifyConstants.DEFAULT_GROUP_2_COLOR_HEX,
+                maxSlots = AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS.toLong(),
+                sortOrder = 1L,
+            ),
+        )
+        referenced.filter { it != AtaPotifyConstants.GROUP_1 && it != AtaPotifyConstants.GROUP_2 }
+            .forEachIndexed { idx, refId ->
+                list += FamilyGroup(
+                    id = refId,
+                    groupId = refId,
+                    name = AtaPotifyConstants.familyGroupLabel(refId),
+                    amountLkr = defaultAmountLkr,
+                    colorHex = paletteCycle[idx % paletteCycle.size],
+                    sortOrder = (idx + 2).toLong(),
+                )
+            }
+        return list
+    }
+
+    val sorted = rawGroups.sortedWith(
+        compareBy<FamilyGroup> { it.sortOrder }.thenBy { it.name.lowercase(Locale.US) }
+    ).toMutableList()
+    val existingIds = sorted.map { it.effectiveId }.toSet()
+    val orphanedIds = (whitelist.map { it.normalizedGroup } + members.map { it.normalizedGroup })
+        .distinct()
+        .filter { it !in existingIds }
+    orphanedIds.forEachIndexed { idx, orphanId ->
+        sorted += FamilyGroup(
+            id = orphanId,
+            groupId = orphanId,
+            name = AtaPotifyConstants.familyGroupLabel(orphanId),
+            amountLkr = defaultAmountLkr,
+            colorHex = if (orphanId == AtaPotifyConstants.GROUP_2) {
+                AtaPotifyConstants.DEFAULT_GROUP_2_COLOR_HEX
+            } else {
+                paletteCycle[idx % paletteCycle.size]
+            },
+            sortOrder = (sorted.size + idx).toLong(),
+        )
+    }
+    return sorted
+}
 
 data class MonthlyBillingSummary(
     val expectedTotalLkr: Long,
@@ -517,11 +702,12 @@ fun buildWhatsAppMonthlySummaryText(
     stats: List<ListeningStat>,
     planConfig: PlanConfig,
     groupFilter: String = AtaPotifyConstants.GROUP_ALL,
+    familyGroups: List<FamilyGroup> = emptyList(),
 ): String {
     val summary = calculateMonthlyBillingSummary(members)
     val hasMultipleGroups = members.map { it.normalizedGroup }.distinct().size > 1
-    val groupSuffix = if (groupFilter == AtaPotifyConstants.GROUP_1 || groupFilter == AtaPotifyConstants.GROUP_2) {
-        " (${AtaPotifyConstants.familyGroupLabel(groupFilter)})"
+    val groupSuffix = if (groupFilter != AtaPotifyConstants.GROUP_ALL) {
+        " (${AtaPotifyConstants.familyGroupLabel(groupFilter, familyGroups)})"
     } else {
         ""
     }
@@ -538,7 +724,7 @@ fun buildWhatsAppMonthlySummaryText(
                     else -> "[PENDING]"
                 }
                 val groupTag = if (groupFilter == AtaPotifyConstants.GROUP_ALL && hasMultipleGroups) {
-                    " [${AtaPotifyConstants.familyGroupShortBadge(m.normalizedGroup)}]"
+                    " [${AtaPotifyConstants.familyGroupShortBadge(m.normalizedGroup, familyGroups)}]"
                 } else {
                     ""
                 }

@@ -103,6 +103,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.FamilyGroup
 import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
 import com.example.data.model.MonthlyBillingSummary
@@ -151,6 +152,7 @@ fun BoardScreen(
     members: List<MemberPaymentStatus>,
     stats: List<ListeningStat>,
     whitelist: List<WhitelistMember>,
+    familyGroups: List<FamilyGroup> = emptyList(),
     overdueReminders: List<OverdueReminderCandidate>,
     defaultAmountLkr: Long,
     planConfig: PlanConfig = PlanConfig(),
@@ -205,29 +207,26 @@ fun BoardScreen(
         val map = mutableMapOf<String, String>()
         members.forEach { map[it.memberKey] = it.normalizedGroup }
         whitelist.forEach { wl ->
-            if (wl.familyGroup == AtaPotifyConstants.GROUP_2 || map[wl.memberKey] == null) {
-                map[wl.memberKey] = wl.normalizedGroup
-            }
+            map[wl.memberKey] = wl.normalizedGroup
         }
         map
     }
 
-    val group1Count = remember(members, groupByKey) {
-        members.count { (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_1 }
-    }
-    val group2Count = remember(members, groupByKey) {
-        members.count { (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_2 }
+    val countByGroup = remember(members, groupByKey, familyGroups) {
+        val counts = mutableMapOf<String, Int>()
+        familyGroups.forEach { counts[it.effectiveId] = 0 }
+        members.forEach { member ->
+            val grp = groupByKey[member.memberKey] ?: member.normalizedGroup
+            counts[grp] = (counts[grp] ?: 0) + 1
+        }
+        counts
     }
 
     val filteredMembers = remember(members, selectedGroupFilter, groupByKey) {
-        when (selectedGroupFilter) {
-            AtaPotifyConstants.GROUP_1 -> members.filter {
-                (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_1
-            }
-            AtaPotifyConstants.GROUP_2 -> members.filter {
-                (groupByKey[it.memberKey] ?: it.normalizedGroup) == AtaPotifyConstants.GROUP_2
-            }
-            else -> members
+        if (selectedGroupFilter == AtaPotifyConstants.GROUP_ALL) {
+            members
+        } else {
+            members.filter { (groupByKey[it.memberKey] ?: it.normalizedGroup) == selectedGroupFilter }
         }
     }
 
@@ -275,6 +274,7 @@ fun BoardScreen(
                     summary = billingSummary,
                     defaultAmountLkr = defaultAmountLkr,
                     selectedGroupFilter = selectedGroupFilter,
+                    familyGroups = familyGroups,
                     isAdmin = session.isAdmin,
                     onStartNewMonth = onOpenStartMonth,
                     onShareMonthlySummary = onShareMonthlySummary,
@@ -306,9 +306,9 @@ fun BoardScreen(
                 item(key = "board_family_group_filter") {
                     FamilyGroupFilterBar(
                         selectedGroup = selectedGroupFilter,
+                        groups = familyGroups,
                         allCount = members.size,
-                        group1Count = group1Count,
-                        group2Count = group2Count,
+                        countByGroup = countByGroup,
                         onSelectGroup = onSelectGroupFilter,
                         modifier = Modifier.animateItem(),
                     )
@@ -451,6 +451,7 @@ fun BoardScreen(
                         whatsappDigits = phone,
                         streakCount = streak,
                         familyGroup = resolvedGroup,
+                        familyGroups = familyGroups,
                         isBusy = isBusy,
                         modifier = Modifier.animateItem(),
                         onUploadSlipClick = {
@@ -513,6 +514,7 @@ fun BoardScreen(
                             isSelf = stat.memberEmail.equals(session.email, ignoreCase = true),
                             isAdminEntry = isAdminRow,
                             familyGroup = if (isAdminRow) null else groupByKey[stat.memberKey],
+                            familyGroups = familyGroups,
                             onOpenInSpotify = onOpenSpotifyQuery,
                             modifier = Modifier.animateItem(),
                         )
@@ -531,13 +533,19 @@ private fun MonthHeroCard(
     summary: MonthlyBillingSummary,
     defaultAmountLkr: Long,
     selectedGroupFilter: String = AtaPotifyConstants.GROUP_ALL,
+    familyGroups: List<FamilyGroup> = emptyList(),
     isAdmin: Boolean,
     onStartNewMonth: () -> Unit,
     onShareMonthlySummary: () -> Unit,
 ) {
-    val amountLkr = month?.amountLkr ?: defaultAmountLkr
-    val groupSubtitle = if (selectedGroupFilter == AtaPotifyConstants.GROUP_1 || selectedGroupFilter == AtaPotifyConstants.GROUP_2) {
-        " • ${AtaPotifyConstants.familyGroupLabel(selectedGroupFilter)}"
+    val selectedGroupObj = remember(selectedGroupFilter, familyGroups) {
+        familyGroups.firstOrNull { it.effectiveId == selectedGroupFilter }
+    }
+    val amountLkr = selectedGroupObj?.amountLkr ?: month?.amountLkr ?: defaultAmountLkr
+    val groupSubtitle = if (selectedGroupFilter != AtaPotifyConstants.GROUP_ALL) {
+        " • ${AtaPotifyConstants.familyGroupLabel(selectedGroupFilter, familyGroups)}"
+    } else if (familyGroups.isNotEmpty()) {
+        " • All ${familyGroups.size} Family Groups"
     } else {
         " • All Family Groups"
     }
@@ -1390,6 +1398,7 @@ fun MemberPaymentCard(
     whatsappDigits: String,
     streakCount: Int = 0,
     familyGroup: String = member.normalizedGroup,
+    familyGroups: List<FamilyGroup> = emptyList(),
     isBusy: Boolean,
     modifier: Modifier = Modifier,
     onUploadSlipClick: () -> Unit,
@@ -1469,7 +1478,7 @@ fun MemberPaymentCard(
                                 )
                             }
                         }
-                        FamilyGroupBadge(familyGroup = familyGroup)
+                        FamilyGroupBadge(familyGroup = familyGroup, familyGroups = familyGroups)
                         if (streakCount >= 1) {
                             AnimatedStreakBadge(streakCount = streakCount)
                         }
@@ -1998,6 +2007,7 @@ fun ListeningLeaderboardCard(
     isSelf: Boolean,
     isAdminEntry: Boolean = false,
     familyGroup: String? = null,
+    familyGroups: List<FamilyGroup> = emptyList(),
     onOpenInSpotify: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -2082,7 +2092,7 @@ fun ListeningLeaderboardCard(
                                 )
                             }
                         } else if (familyGroup != null) {
-                            FamilyGroupBadge(familyGroup = familyGroup)
+                            FamilyGroupBadge(familyGroup = familyGroup, familyGroups = familyGroups)
                         }
                         if (hasSynced) {
                             AnimatedEqualizerBars(

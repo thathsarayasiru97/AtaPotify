@@ -389,7 +389,7 @@ test("Admin can create month batch, confirm payment, log reminder, and update LK
     })
   );
 
-  // Admin can assign familyGroup on whitelist and payment member docs
+  // Admin can assign any valid familyGroup ID on whitelist and payment member docs
   await assertSucceeds(
     adminDb.collection("whitelist").doc(ALICE_KEY).update({
       familyGroup: "group_2",
@@ -398,15 +398,15 @@ test("Admin can create month batch, confirm payment, log reminder, and update LK
   );
   await assertSucceeds(
     adminDb.collection("payments").doc(MONTH_ID).collection("members").doc(ALICE_KEY).update({
-      familyGroup: "group_2",
+      familyGroup: "grp_chill_squad",
       updatedAt: new Date(),
     })
   );
 
-  // Invalid familyGroup value is rejected
+  // Malformed familyGroup value (spaces/symbols) is rejected
   await assertFails(
     adminDb.collection("whitelist").doc(ALICE_KEY).update({
-      familyGroup: "group_99",
+      familyGroup: "invalid group!",
       updatedAt: new Date(),
     })
   );
@@ -579,5 +579,88 @@ test("Approval Mode: verified user creates own pending access_request, cannot se
     })
   );
 });
+
+test("Family Groups CRUD: Admin can create/update/delete groups, whitelisted members can read, non-admin and strangers denied writes", async () => {
+  await seedMonthAndMembers();
+  const adminDb = adminContext().firestore();
+  const aliceDb = memberContext(ALICE_UID, ALICE_EMAIL).firestore();
+  const strangerDb = memberContext(STRANGER_UID, STRANGER_EMAIL).firestore();
+  const now = new Date();
+
+  // Admin creates custom Family Group with start date, price split, and custom color hex
+  await assertSucceeds(
+    adminDb.collection("family_groups").doc("grp_colombo").set({
+      groupId: "grp_colombo",
+      name: "Colombo Crew",
+      startDate: "2026-11-05",
+      amountLkr: 520,
+      colorHex: "#A78BFA",
+      maxSlots: 6,
+      sortOrder: 2,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Invalid colorHex or invalid startDate is rejected even for Admin
+  await assertFails(
+    adminDb.collection("family_groups").doc("grp_bad_color").set({
+      groupId: "grp_bad_color",
+      name: "Bad Color",
+      startDate: "2026-11-05",
+      amountLkr: 450,
+      colorHex: "purple",
+      maxSlots: 6,
+      sortOrder: 3,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertFails(
+    adminDb.collection("family_groups").doc("grp_bad_date").set({
+      groupId: "grp_bad_date",
+      name: "Bad Date",
+      startDate: "15/11/2026",
+      amountLkr: 450,
+      colorHex: "#1ED760",
+      maxSlots: 6,
+      sortOrder: 3,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Authorized member Alice can list and get family_groups
+  await assertSucceeds(aliceDb.collection("family_groups").get());
+  await assertSucceeds(aliceDb.collection("family_groups").doc("grp_colombo").get());
+
+  // Stranger cannot read family_groups
+  await assertFails(strangerDb.collection("family_groups").get());
+  await assertFails(strangerDb.collection("family_groups").doc("grp_colombo").get());
+
+  // Non-admin member cannot create/update/delete family_groups
+  await assertFails(
+    aliceDb.collection("family_groups").doc("grp_colombo").update({
+      amountLkr: 100,
+      updatedAt: new Date(),
+    })
+  );
+  await assertFails(aliceDb.collection("family_groups").doc("grp_colombo").delete());
+
+  // Admin updates name, price split, start date, and color hex
+  await assertSucceeds(
+    adminDb.collection("family_groups").doc("grp_colombo").update({
+      name: "Colombo Squad",
+      startDate: "2026-11-10",
+      amountLkr: 550,
+      colorHex: "#F472B6",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Admin can delete a family group
+  await assertSucceeds(adminDb.collection("family_groups").doc("grp_colombo").delete());
+});
+
 
 

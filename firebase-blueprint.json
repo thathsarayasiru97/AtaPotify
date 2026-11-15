@@ -45,7 +45,7 @@
         "displayName": { "type": "string", "description": "Friend display name" },
         "phone": { "type": "string", "description": "WhatsApp number in international digits" },
         "spotifyEmail": { "type": "string", "description": "Email address assigned to the friend's Spotify account" },
-        "familyGroup": { "type": "string", "enum": ["group_1", "group_2"], "description": "Assigned Spotify Family plan group (group_1 or group_2)" },
+        "familyGroup": { "type": "string", "description": "Assigned Spotify Family group ID (e.g. group_1, group_2, or custom group ID)" },
         "role": { "type": "string", "enum": ["member"], "description": "Member role" },
         "active": { "type": "boolean", "description": "Whether friend is active in current plan" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
@@ -76,7 +76,7 @@
         "memberKey": { "type": "string", "description": "Deterministic member key" },
         "memberEmail": { "type": "string", "description": "Lowercase member email for self-update checks" },
         "displayName": { "type": "string", "description": "Member display name" },
-        "familyGroup": { "type": "string", "enum": ["group_1", "group_2"], "description": "Assigned Spotify Family plan group (group_1 or group_2)" },
+        "familyGroup": { "type": "string", "description": "Assigned Spotify Family group ID (e.g. group_1, group_2, or custom group ID)" },
         "status": { "type": "string", "enum": ["pending", "verifying", "paid"], "description": "Payment state" },
         "amountLkr": { "type": "integer", "description": "Amount due in LKR" },
         "hasReceipt": { "type": "boolean", "description": "True if a receipt image has been uploaded" },
@@ -137,6 +137,23 @@
         "syncedAt": { "type": "string", "format": "date-time", "description": "Server sync timestamp" }
       },
       "required": ["memberKey", "memberEmail", "displayName", "minutesListened", "tracksCounted", "allowedEmails", "syncedAt"]
+    },
+    "FamilyGroup": {
+      "title": "FamilyGroup",
+      "description": "Admin-managed Spotify Family plan group with custom name, starting date, per-member LKR split, slot capacity, and theme color.",
+      "type": "object",
+      "properties": {
+        "groupId": { "type": "string", "description": "Unique group identifier (e.g. group_1, group_2, grp_xxxx)" },
+        "name": { "type": "string", "description": "Custom display name of the Family Group" },
+        "startDate": { "type": "string", "description": "Optional subscription starting date in YYYY-MM-DD format" },
+        "amountLkr": { "type": "integer", "description": "Per-member monthly split amount in LKR for this group" },
+        "colorHex": { "type": "string", "description": "Hex accent color in #RRGGBB format" },
+        "maxSlots": { "type": "integer", "description": "Maximum member slots for this family plan (default 6)" },
+        "sortOrder": { "type": "integer", "description": "Display order index" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp" }
+      },
+      "required": ["groupId", "name", "startDate", "amountLkr", "colorHex", "maxSlots", "sortOrder", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -151,6 +168,10 @@
     "/plan_config/{configId}": {
       "schema": { "$ref": "#/entities/PlanConfig" },
       "description": "Global family plan settings document (settings)."
+    },
+    "/family_groups/{groupId}": {
+      "schema": { "$ref": "#/entities/FamilyGroup" },
+      "description": "Dynamic Spotify Family plan groups managed by Admin."
     },
     "/whitelist/{memberKey}": {
       "schema": { "$ref": "#/entities/WhitelistMember" },

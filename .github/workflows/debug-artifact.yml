@@ -1,0 +1,151 @@
+name: Build Debug Test APK (Artifact Only)
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - debug
+      - testing
+      - 'test/**'
+      - 'debug/**'
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-debug-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      version_name: ${{ steps.check.outputs.version_name }}
+    steps:
+      - name: Checkout version config
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            app/build.gradle.kts
+
+      - name: Determine whether to build debug artifact
+        id: check
+        run: |
+          VERSION_NAME=$(grep -E '^\s*versionName\s*=' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$VERSION_NAME" == *-debug* ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release version (${VERSION_NAME}) on main; skipping debug artifact build."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-debug-artifact:
+    needs: check-debug-trigger
+    if: needs.check-debug-trigger.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare environment secrets
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+        run: |
+          if [ -n "$SPOTIFY_CLIENT_ID" ]; then
+            echo "SPOTIFY_CLIENT_ID=$SPOTIFY_CLIENT_ID" > .env
+          elif [ -f .env.example ]; then
+            cp .env.example .env
+          else
+            touch .env
+          fi
+
+      - name: Prepare Firebase configuration
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -f app/google-services.json ]; then
+            echo "Using repository app/google-services.json"
+          elif [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          elif [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > app/google-services.json
+          else
+            echo "::error::app/google-services.json is missing. Add GOOGLE_SERVICES_JSON or GOOGLE_SERVICES_JSON_BASE64 in GitHub Repository Secrets."
+            exit 1
+          fi
+
+      - name: Decode debug signing keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "Using DEBUG_KEYSTORE_BASE64 secret for consistent debug signing"
+            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > debug.keystore
+          elif [ -f debug.keystore.base64 ]; then
+            echo "Decoding repository debug.keystore.base64"
+            base64 -d debug.keystore.base64 > debug.keystore
+          else
+            echo "::warning::No debug keystore found; generating an ephemeral debug.keystore."
+            keytool -genkeypair -noprompt \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android | grep -E "SHA1:|SHA256:" || true
+
+      - name: Run unit tests
+        run: >
+          gradle :app:testDebugUnitTest
+          --tests 'com.example.data.model.MonthlyBillingSummaryTest'
+          --tests 'com.example.data.service.AppUpdateServiceTest'
+          --tests 'com.example.ExampleUnitTest'
+
+      - name: Build Debug APK
+        run: |
+          gradle :app:assembleDebug
+          VERSION_NAME="${{ needs.check-debug-trigger.outputs.version_name }}"
+          APK_NAME="AtaPotify-v${VERSION_NAME}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
+          echo "APK_NAME=${APK_NAME}" >> "$GITHUB_ENV"
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AtaPotify-v${{ needs.check-debug-trigger.outputs.version_name }}
+          path: AtaPotify-*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Write Artifact Summary
+        run: |
+          {
+            echo "### Debug Test APK Ready"
+            echo "- **Version:** \`${{ needs.check-debug-trigger.outputs.version_name }}\`"
+            echo "- **Artifact:** \`${{ env.APK_NAME }}\` (zipped under **Artifacts** below)"
+            echo "- **Public Releases / In-App Updater:** Not updated"
+          } >> "$GITHUB_STEP_SUMMARY"

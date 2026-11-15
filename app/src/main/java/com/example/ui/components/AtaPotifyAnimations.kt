@@ -40,6 +40,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -82,6 +84,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.FamilyGroup
 import com.example.data.model.ListeningStat
 import com.example.ui.theme.AmberContainer
 import com.example.ui.theme.AmberWarning
@@ -94,6 +97,7 @@ import com.example.ui.theme.SurfaceElevated
 import com.example.ui.theme.SurfaceHighest
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.parseGroupColorHex
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -234,14 +238,17 @@ fun AnimatedStreakBadge(
 @Composable
 fun FamilyGroupBadge(
     familyGroup: String,
+    familyGroups: List<FamilyGroup> = emptyList(),
     onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val normalized = AtaPotifyConstants.normalizeFamilyGroup(familyGroup)
-    val isGroup2 = normalized == AtaPotifyConstants.GROUP_2
-    val fg = if (isGroup2) Family2Accent else SpotifyEmerald
-    val bg = if (isGroup2) Family2Container else EmeraldContainer
-    val label = AtaPotifyConstants.familyGroupShortBadge(normalized)
+    val fg = parseGroupColorHex(
+        hex = AtaPotifyConstants.familyGroupColorHex(normalized, familyGroups),
+        fallback = if (normalized == AtaPotifyConstants.GROUP_2) Family2Accent else SpotifyEmerald,
+    )
+    val bg = fg.copy(alpha = 0.16f)
+    val label = AtaPotifyConstants.familyGroupShortBadge(normalized, familyGroups)
 
     val chipModifier = if (onClick != null) {
         modifier.pressBounceClickable(onClick = onClick)
@@ -250,19 +257,165 @@ fun FamilyGroupBadge(
     }
 
     Surface(
-        color = bg.copy(alpha = 0.9f),
+        color = bg,
         shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, fg.copy(alpha = 0.45f)),
+        border = BorderStroke(1.dp, fg.copy(alpha = 0.5f)),
         modifier = chipModifier.testTag("family_group_badge_$normalized"),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-            fontWeight = FontWeight.SemiBold,
-            color = fg,
-            maxLines = 1,
+        Row(
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(fg),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                fontWeight = FontWeight.SemiBold,
+                color = fg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+fun FamilyGroupFilterBar(
+    selectedGroup: String,
+    groups: List<FamilyGroup>,
+    allCount: Int,
+    countByGroup: Map<String, Int>,
+    showSlotCapacity: Boolean = false,
+    onSelectGroup: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val options = remember(groups, allCount, countByGroup, showSlotCapacity) {
+        buildList {
+            add(Triple(AtaPotifyConstants.GROUP_ALL, "All ($allCount)", SpotifyEmerald))
+            groups.forEach { grp ->
+                val count = countByGroup[grp.effectiveId] ?: 0
+                val countLabel = if (showSlotCapacity) "$count/${grp.maxSlots}" else "$count"
+                val color = parseGroupColorHex(grp.colorHex, SpotifyEmerald)
+                add(Triple(grp.effectiveId, "${grp.name} ($countLabel)", color))
+            }
+        }
+    }
+
+    Surface(
+        color = SurfaceDark,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, BorderSubtle),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("family_group_filter_bar"),
+    ) {
+        if (options.size <= 3) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                options.forEach { (groupKey, label, accentColor) ->
+                    GroupFilterChipItem(
+                        groupKey = groupKey,
+                        label = label,
+                        accentColor = accentColor,
+                        isSelected = selectedGroup == groupKey,
+                        onSelect = { onSelectGroup(groupKey) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        } else {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                items(options, key = { it.first }) { (groupKey, label, accentColor) ->
+                    GroupFilterChipItem(
+                        groupKey = groupKey,
+                        label = label,
+                        accentColor = accentColor,
+                        isSelected = selectedGroup == groupKey,
+                        onSelect = { onSelectGroup(groupKey) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupFilterChipItem(
+    groupKey: String,
+    label: String,
+    accentColor: Color,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val bg by animateColorAsState(
+        targetValue = if (isSelected) accentColor.copy(alpha = 0.16f) else Color.Transparent,
+        animationSpec = tween(220),
+        label = "group_filter_bg_$groupKey",
+    )
+    val fg by animateColorAsState(
+        targetValue = if (isSelected) accentColor else TextSecondary,
+        animationSpec = tween(220),
+        label = "group_filter_fg_$groupKey",
+    )
+
+    Surface(
+        color = bg,
+        shape = RoundedCornerShape(12.dp),
+        border = if (isSelected) BorderStroke(1.dp, accentColor.copy(alpha = 0.55f)) else null,
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .pressBounceClickable(onClick = onSelect)
+            .testTag("group_filter_chip_$groupKey"),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (groupKey == AtaPotifyConstants.GROUP_ALL) {
+                Icon(
+                    imageVector = Icons.Default.Groups,
+                    contentDescription = null,
+                    tint = fg,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(accentColor),
+                )
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = fg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -276,85 +429,34 @@ fun FamilyGroupFilterBar(
     onSelectGroup: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val options = remember(allCount, group1Count, group2Count, showSlotCapacity) {
-        val g1Cap = if (showSlotCapacity) "$group1Count/${AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS}" else "$group1Count"
-        val g2Cap = if (showSlotCapacity) "$group2Count/${AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS}" else "$group2Count"
+    val fallbackGroups = remember {
         listOf(
-            Triple(AtaPotifyConstants.GROUP_ALL, "All Groups ($allCount)", SpotifyEmerald),
-            Triple(AtaPotifyConstants.GROUP_1, "Family 1 ($g1Cap)", SpotifyEmerald),
-            Triple(AtaPotifyConstants.GROUP_2, "Family 2 ($g2Cap)", Family2Accent),
+            FamilyGroup(
+                id = AtaPotifyConstants.GROUP_1,
+                groupId = AtaPotifyConstants.GROUP_1,
+                name = "Family 1",
+                colorHex = AtaPotifyConstants.DEFAULT_GROUP_1_COLOR_HEX,
+            ),
+            FamilyGroup(
+                id = AtaPotifyConstants.GROUP_2,
+                groupId = AtaPotifyConstants.GROUP_2,
+                name = "Family 2",
+                colorHex = AtaPotifyConstants.DEFAULT_GROUP_2_COLOR_HEX,
+            ),
         )
     }
-
-    Surface(
-        color = SurfaceDark,
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, BorderSubtle),
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("family_group_filter_bar"),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(5.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            options.forEach { (groupKey, label, accentColor) ->
-                val isSelected = selectedGroup == groupKey
-                val bg by animateColorAsState(
-                    targetValue = when {
-                        !isSelected -> Color.Transparent
-                        groupKey == AtaPotifyConstants.GROUP_2 -> Family2Container
-                        else -> EmeraldContainer
-                    },
-                    animationSpec = tween(220),
-                    label = "group_filter_bg_$groupKey",
-                )
-                val fg by animateColorAsState(
-                    targetValue = if (isSelected) accentColor else TextSecondary,
-                    animationSpec = tween(220),
-                    label = "group_filter_fg_$groupKey",
-                )
-
-                Surface(
-                    color = bg,
-                    shape = RoundedCornerShape(12.dp),
-                    border = if (isSelected) BorderStroke(1.dp, accentColor.copy(alpha = 0.55f)) else null,
-                    modifier = Modifier
-                        .weight(1f)
-                        .minimumInteractiveComponentSize()
-                        .pressBounceClickable { onSelectGroup(groupKey) }
-                        .testTag("group_filter_chip_$groupKey"),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 9.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (groupKey == AtaPotifyConstants.GROUP_ALL) {
-                            Icon(
-                                imageVector = Icons.Default.Groups,
-                                contentDescription = null,
-                                tint = fg,
-                                modifier = Modifier.size(14.dp),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                            color = fg,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-    }
+    FamilyGroupFilterBar(
+        selectedGroup = selectedGroup,
+        groups = fallbackGroups,
+        allCount = allCount,
+        countByGroup = mapOf(
+            AtaPotifyConstants.GROUP_1 to group1Count,
+            AtaPotifyConstants.GROUP_2 to group2Count,
+        ),
+        showSlotCapacity = showSlotCapacity,
+        onSelectGroup = onSelectGroup,
+        modifier = modifier,
+    )
 }
 
 @Composable

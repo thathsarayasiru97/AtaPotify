@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,6 +41,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -67,9 +71,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AccessRequest
 import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.FamilyGroup
 import com.example.data.model.PaymentMonth
 import com.example.data.model.PlanConfig
 import com.example.data.model.WhitelistMember
+import com.example.data.model.resolveEffectiveFamilyGroups
 import com.example.ui.components.FamilyGroupBadge
 import com.example.ui.components.FamilyGroupFilterBar
 import com.example.ui.theme.AmberContainer
@@ -84,12 +90,14 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceElevated
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.parseGroupColorHex
 
 @Composable
 fun AdminScreen(
     planConfig: PlanConfig,
     currentMonth: PaymentMonth?,
     whitelist: List<WhitelistMember>,
+    familyGroups: List<FamilyGroup> = emptyList(),
     pendingRequests: List<AccessRequest> = emptyList(),
     isBusy: Boolean,
     onApproveRequest: (AccessRequest, String) -> Unit = { _, _ -> },
@@ -119,24 +127,30 @@ fun AdminScreen(
     var announcementInput by remember { mutableStateOf("") }
     var rosterGroupFilter by remember { mutableStateOf(AtaPotifyConstants.GROUP_ALL) }
 
+    val resolvedGroups = remember(familyGroups, planConfig.monthlyAmountLkr) {
+        resolveEffectiveFamilyGroups(familyGroups, planConfig.monthlyAmountLkr)
+    }
+
     val activeSlides = planConfig.effectiveAnnouncements
-    val activeGroup1Count = remember(whitelist) {
-        whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_1 }
+    val activeCountByGroup = remember(whitelist, resolvedGroups) {
+        val counts = mutableMapOf<String, Int>()
+        resolvedGroups.forEach { counts[it.effectiveId] = 0 }
+        whitelist.filter { it.active }.forEach { member ->
+            counts[member.normalizedGroup] = (counts[member.normalizedGroup] ?: 0) + 1
+        }
+        counts
     }
-    val activeGroup2Count = remember(whitelist) {
-        whitelist.count { it.active && it.normalizedGroup == AtaPotifyConstants.GROUP_2 }
-    }
-    val defaultSuggestedGroup = if (activeGroup1Count >= AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS) {
-        AtaPotifyConstants.GROUP_2
-    } else {
-        AtaPotifyConstants.GROUP_1
+    val defaultSuggestedGroup = remember(resolvedGroups, activeCountByGroup) {
+        resolvedGroups.firstOrNull { (activeCountByGroup[it.effectiveId] ?: 0) < it.maxSlots }?.effectiveId
+            ?: resolvedGroups.firstOrNull()?.effectiveId
+            ?: AtaPotifyConstants.GROUP_1
     }
 
     val filteredWhitelist = remember(whitelist, rosterGroupFilter) {
-        when (rosterGroupFilter) {
-            AtaPotifyConstants.GROUP_1 -> whitelist.filter { it.normalizedGroup == AtaPotifyConstants.GROUP_1 }
-            AtaPotifyConstants.GROUP_2 -> whitelist.filter { it.normalizedGroup == AtaPotifyConstants.GROUP_2 }
-            else -> whitelist
+        if (rosterGroupFilter == AtaPotifyConstants.GROUP_ALL) {
+            whitelist
+        } else {
+            whitelist.filter { it.normalizedGroup == rosterGroupFilter }
         }
     }
 
@@ -159,7 +173,7 @@ fun AdminScreen(
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Text(
-                        text = "Approve join requests into Family 1 or Family 2, manage pinned slideshow messages, bank details, and member rosters.",
+                        text = "Approve join requests into any Family Group, manage pinned slideshow messages, bank details, and member rosters.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                     )
@@ -197,9 +211,9 @@ fun AdminScreen(
                 items(pendingRequests, key = { "req_${it.uid.ifBlank { it.id }}" }) { request ->
                     AccessRequestCard(
                         request = request,
+                        familyGroups = resolvedGroups,
                         defaultGroup = defaultSuggestedGroup,
-                        group1ActiveCount = activeGroup1Count,
-                        group2ActiveCount = activeGroup2Count,
+                        activeCountByGroup = activeCountByGroup,
                         isBusy = isBusy,
                         modifier = Modifier.animateItem(),
                         onApprove = { targetGroup -> onApproveRequest(request, targetGroup) },
@@ -597,9 +611,13 @@ fun AdminScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onBackground,
                             )
+                            val capacitySummary = resolvedGroups.joinToString(" • ") { grp ->
+                                val c = activeCountByGroup[grp.effectiveId] ?: 0
+                                "${AtaPotifyConstants.familyGroupShortBadge(grp.effectiveId, resolvedGroups)}: $c/${grp.maxSlots}"
+                            }
                             val reportedCount = whitelist.count { it.spotifyEmail.isNotBlank() }
                             Text(
-                                text = "Fam 1: $activeGroup1Count/6 active • Fam 2: $activeGroup2Count/6 active • $reportedCount Spotify emails",
+                                text = "$capacitySummary • $reportedCount Spotify",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextSecondary,
                             )
@@ -627,9 +645,9 @@ fun AdminScreen(
 
                     FamilyGroupFilterBar(
                         selectedGroup = rosterGroupFilter,
+                        groups = resolvedGroups,
                         allCount = whitelist.size,
-                        group1Count = activeGroup1Count,
-                        group2Count = activeGroup2Count,
+                        countByGroup = activeCountByGroup,
                         showSlotCapacity = true,
                         onSelectGroup = { rosterGroupFilter = it },
                     )
@@ -657,7 +675,7 @@ fun AdminScreen(
                                 text = if (whitelist.isEmpty()) {
                                     "No approved members yet"
                                 } else {
-                                    "No members in ${AtaPotifyConstants.familyGroupLabel(rosterGroupFilter)} yet"
+                                    "No members in ${AtaPotifyConstants.familyGroupLabel(rosterGroupFilter, resolvedGroups)} yet"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
@@ -672,13 +690,9 @@ fun AdminScreen(
                 }
             } else {
                 items(filteredWhitelist, key = { it.memberKey }) { member ->
-                    val nextGroup = if (member.normalizedGroup == AtaPotifyConstants.GROUP_2) {
-                        AtaPotifyConstants.GROUP_1
-                    } else {
-                        AtaPotifyConstants.GROUP_2
-                    }
                     WhitelistRosterCard(
                         member = member,
+                        familyGroups = resolvedGroups,
                         isBusy = isBusy,
                         modifier = Modifier.animateItem(),
                         onCopySpotifyEmail = {
@@ -686,7 +700,7 @@ fun AdminScreen(
                                 onCopyText("Spotify Email", member.spotifyEmail)
                             }
                         },
-                        onSwitchGroup = { onSwitchMemberGroup(member, nextGroup) },
+                        onSelectGroup = { targetGroup -> onSwitchMemberGroup(member, targetGroup) },
                         onEdit = { onEditMemberClick(member) },
                         onToggleActive = { active -> onToggleMemberActive(member, active) },
                         onRemove = { onRemoveMemberClick(member) },
@@ -699,12 +713,13 @@ fun AdminScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AccessRequestCard(
     request: AccessRequest,
+    familyGroups: List<FamilyGroup>,
     defaultGroup: String,
-    group1ActiveCount: Int,
-    group2ActiveCount: Int,
+    activeCountByGroup: Map<String, Int>,
     isBusy: Boolean,
     modifier: Modifier = Modifier,
     onApprove: (String) -> Unit,
@@ -770,40 +785,41 @@ private fun AccessRequestCard(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = "Assign Group:",
                     style = MaterialTheme.typography.labelSmall,
                     color = TextSecondary,
                 )
-                FilterChip(
-                    selected = selectedGroup == AtaPotifyConstants.GROUP_1,
-                    onClick = { selectedGroup = AtaPotifyConstants.GROUP_1 },
-                    label = { Text("Family 1 ($group1ActiveCount/6)") },
-                    modifier = Modifier.testTag("req_group_1_$reqUid"),
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = SurfaceDark,
-                        labelColor = TextSecondary,
-                        selectedContainerColor = EmeraldContainer,
-                        selectedLabelColor = SpotifyEmerald,
-                    ),
-                )
-                FilterChip(
-                    selected = selectedGroup == AtaPotifyConstants.GROUP_2,
-                    onClick = { selectedGroup = AtaPotifyConstants.GROUP_2 },
-                    label = { Text("Family 2 ($group2ActiveCount/6)") },
-                    modifier = Modifier.testTag("req_group_2_$reqUid"),
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = SurfaceDark,
-                        labelColor = TextSecondary,
-                        selectedContainerColor = Color(0xFF0E2A38),
-                        selectedLabelColor = Color(0xFF38BDF8),
-                    ),
-                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    familyGroups.forEach { grp ->
+                        val activeCount = activeCountByGroup[grp.effectiveId] ?: 0
+                        val accent = parseGroupColorHex(grp.colorHex, SpotifyEmerald)
+                        FilterChip(
+                            selected = selectedGroup == grp.effectiveId,
+                            onClick = { selectedGroup = grp.effectiveId },
+                            leadingIcon = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(accent),
+                                )
+                            },
+                            label = { Text("${grp.name} ($activeCount/${grp.maxSlots})") },
+                            modifier = Modifier.testTag("req_group_${grp.effectiveId}_$reqUid"),
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = SurfaceDark,
+                                labelColor = TextSecondary,
+                                selectedContainerColor = accent.copy(alpha = 0.2f),
+                                selectedLabelColor = accent,
+                            ),
+                        )
+                    }
+                }
             }
 
             Row(
@@ -848,7 +864,7 @@ private fun AccessRequestCard(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text("Approve (${AtaPotifyConstants.familyGroupShortBadge(selectedGroup)})")
+                    Text("Approve (${AtaPotifyConstants.familyGroupShortBadge(selectedGroup, familyGroups)})")
                 }
             }
         }
@@ -858,14 +874,29 @@ private fun AccessRequestCard(
 @Composable
 private fun WhitelistRosterCard(
     member: WhitelistMember,
+    familyGroups: List<FamilyGroup>,
     isBusy: Boolean,
     modifier: Modifier = Modifier,
     onCopySpotifyEmail: () -> Unit,
-    onSwitchGroup: () -> Unit,
+    onSelectGroup: (String) -> Unit,
     onEdit: () -> Unit,
     onToggleActive: (Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
+    var showGroupMenu by remember { mutableStateOf(false) }
+    val handleQuickGroupAction = {
+        if (familyGroups.size <= 2) {
+            val other = familyGroups.firstOrNull { it.effectiveId != member.normalizedGroup }?.effectiveId
+                ?: if (member.normalizedGroup == AtaPotifyConstants.GROUP_2) {
+                    AtaPotifyConstants.GROUP_1
+                } else {
+                    AtaPotifyConstants.GROUP_2
+                }
+            onSelectGroup(other)
+        } else {
+            showGroupMenu = true
+        }
+    }
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -895,7 +926,8 @@ private fun WhitelistRosterCard(
                         )
                         FamilyGroupBadge(
                             familyGroup = member.normalizedGroup,
-                            onClick = if (!isBusy) onSwitchGroup else null,
+                            familyGroups = familyGroups,
+                            onClick = if (!isBusy) handleQuickGroupAction else null,
                         )
                         if (!member.active) {
                             Surface(color = CoralContainer, shape = RoundedCornerShape(6.dp)) {
@@ -935,18 +967,51 @@ private fun WhitelistRosterCard(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onSwitchGroup,
-                        enabled = !isBusy,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("switch_group_${member.memberKey}"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.SwapHoriz,
-                            contentDescription = "Switch Family Group for ${member.displayName}",
-                            tint = SpotifyEmerald,
-                        )
+                    Box {
+                        IconButton(
+                            onClick = handleQuickGroupAction,
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("switch_group_${member.memberKey}"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SwapHoriz,
+                                contentDescription = "Switch Family Group for ${member.displayName}",
+                                tint = SpotifyEmerald,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showGroupMenu,
+                            onDismissRequest = { showGroupMenu = false },
+                            containerColor = SurfaceElevated,
+                        ) {
+                            familyGroups.forEach { grp ->
+                                val isCurrent = grp.effectiveId == member.normalizedGroup
+                                val accent = parseGroupColorHex(grp.colorHex, SpotifyEmerald)
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (isCurrent) "${grp.name} (Current)" else "Move to ${grp.name}",
+                                            color = if (isCurrent) accent else MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(accent),
+                                        )
+                                    },
+                                    onClick = {
+                                        showGroupMenu = false
+                                        if (!isCurrent) onSelectGroup(grp.effectiveId)
+                                    },
+                                )
+                            }
+                        }
                     }
                     Switch(
                         checked = member.active,

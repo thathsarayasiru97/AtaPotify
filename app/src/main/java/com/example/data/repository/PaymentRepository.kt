@@ -7,6 +7,7 @@ import com.example.data.error.handleFirestoreError
 import com.example.data.error.unwrapFirestoreException
 import com.example.data.model.AccessRequest
 import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.FamilyGroup
 import com.example.data.model.ListeningStat
 import com.example.data.model.MemberPaymentStatus
 import com.example.data.model.PaymentMonth
@@ -77,6 +78,283 @@ class PaymentRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, ref.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    fun observeFamilyGroups(): Flow<List<FamilyGroup>> {
+        val path = "family_groups"
+        return db.collection(path)
+            .snapshots()
+            .map { snapshot ->
+                snapshot.toObjects(FamilyGroup::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedWith(compareBy<FamilyGroup> { it.sortOrder }.thenBy { it.name.lowercase() })
+            }
+            .catch { error ->
+                val firestoreError = error.unwrapFirestoreException()
+                if (firestoreError == null && error is CancellationException) throw error
+                if (auth.currentUser != null) {
+                    handleFirestoreError(firestoreError ?: error, OperationType.LIST, path, auth)
+                }
+                throw error
+            }
+    }
+
+    suspend fun ensureDefaultFamilyGroupsIfAdmin(
+        defaultAmountLkr: Long = AtaPotifyConstants.DEFAULT_MONTHLY_AMOUNT_LKR,
+    ): Result<Unit> {
+        requireUserId()
+        val colRef = db.collection("family_groups")
+        return try {
+            val snap = colRef.get().await()
+            if (snap.isEmpty) {
+                val defaultStart = "${AtaPotifyConstants.currentMonthId()}-01"
+                val safeRate = defaultAmountLkr.coerceIn(1L, 100_000L)
+                val batch = db.batch()
+                batch.set(
+                    colRef.document(AtaPotifyConstants.GROUP_1),
+                    mapOf(
+                        "groupId" to AtaPotifyConstants.GROUP_1,
+                        "name" to "Family 1",
+                        "startDate" to defaultStart,
+                        "amountLkr" to safeRate,
+                        "colorHex" to AtaPotifyConstants.DEFAULT_GROUP_1_COLOR_HEX,
+                        "maxSlots" to AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS.toLong(),
+                        "sortOrder" to 0L,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+                batch.set(
+                    colRef.document(AtaPotifyConstants.GROUP_2),
+                    mapOf(
+                        "groupId" to AtaPotifyConstants.GROUP_2,
+                        "name" to "Family 2",
+                        "startDate" to defaultStart,
+                        "amountLkr" to safeRate,
+                        "colorHex" to AtaPotifyConstants.DEFAULT_GROUP_2_COLOR_HEX,
+                        "maxSlots" to AtaPotifyConstants.MAX_SPOTIFY_FAMILY_SLOTS.toLong(),
+                        "sortOrder" to 1L,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                )
+                batch.commit().await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, colRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveFamilyGroup(
+        groupId: String?,
+        name: String,
+        startDate: String,
+        amountLkr: Long,
+        colorHex: String,
+        maxSlots: Long,
+        existingGroups: List<FamilyGroup>,
+        alsoUpdateActiveMonthMembers: Boolean,
+        activeMonth: PaymentMonth?,
+        activeMonthMembers: List<MemberPaymentStatus>,
+    ): Result<String> {
+        requireUserId()
+        val cleanName = name.trim().take(40)
+        require(cleanName.isNotEmpty()) { "Group name cannot be empty" }
+        val cleanStartDate = startDate.trim()
+        require(cleanStartDate.isEmpty() || cleanStartDate.matches(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) {
+            "Start date must be YYYY-MM-DD"
+        }
+        require(amountLkr in 1..100_000) { "Amount must be between 1 and 100,000 LKR" }
+        val cleanColor = AtaPotifyConstants.normalizeHexColor(colorHex)
+        val safeSlots = maxSlots.coerceIn(1L, 20L)
+
+        val targetId = if (!groupId.isNullOrBlank()) {
+            AtaPotifyConstants.normalizeFamilyGroup(groupId)
+        } else {
+            AtaPotifyConstants.generateGroupId(
+                cleanName,
+                existingGroups.map { it.effectiveId }.toSet(),
+            )
+        }
+
+        val groupRef = db.collection("family_groups").document(targetId)
+        val existingDoc = try {
+            groupRef.get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, groupRef.path, auth)
+            null
+        }
+
+        val batch = db.batch()
+        if (existingDoc != null && existingDoc.exists()) {
+            batch.update(
+                groupRef,
+                mapOf(
+                    "name" to cleanName,
+                    "startDate" to cleanStartDate,
+                    "amountLkr" to amountLkr,
+                    "colorHex" to cleanColor,
+                    "maxSlots" to safeSlots,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        } else {
+            val nextSort = (existingGroups.maxOfOrNull { it.sortOrder }?.plus(1L))
+                ?: existingGroups.size.toLong()
+            batch.set(
+                groupRef,
+                mapOf(
+                    "groupId" to targetId,
+                    "name" to cleanName,
+                    "startDate" to cleanStartDate,
+                    "amountLkr" to amountLkr,
+                    "colorHex" to cleanColor,
+                    "maxSlots" to safeSlots,
+                    "sortOrder" to nextSort.coerceIn(0L, 1000L),
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        }
+
+        if (alsoUpdateActiveMonthMembers && activeMonth != null) {
+            val monthMembersRef = db.collection("payments").document(activeMonth.monthId).collection("members")
+            for (member in activeMonthMembers) {
+                if (member.normalizedGroup == targetId) {
+                    batch.update(
+                        monthMembersRef.document(member.memberKey),
+                        mapOf(
+                            "amountLkr" to amountLkr,
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
+                    )
+                }
+            }
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(targetId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, groupRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteFamilyGroup(
+        groupId: String,
+        reassignToGroupId: String?,
+        whitelist: List<WhitelistMember>,
+        activeMonth: PaymentMonth?,
+        activeMonthMembers: List<MemberPaymentStatus>,
+    ): Result<Unit> {
+        requireUserId()
+        val normalizedTarget = AtaPotifyConstants.normalizeFamilyGroup(groupId)
+        val groupRef = db.collection("family_groups").document(normalizedTarget)
+        val batch = db.batch()
+        batch.delete(groupRef)
+
+        if (!reassignToGroupId.isNullOrBlank()) {
+            val fallbackGroup = AtaPotifyConstants.normalizeFamilyGroup(reassignToGroupId)
+            if (fallbackGroup != normalizedTarget) {
+                for (member in whitelist) {
+                    if (member.normalizedGroup == normalizedTarget) {
+                        batch.update(
+                            db.collection("whitelist").document(member.memberKey),
+                            mapOf(
+                                "familyGroup" to fallbackGroup,
+                                "updatedAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    }
+                }
+                if (activeMonth != null) {
+                    val monthMembersRef = db.collection("payments").document(activeMonth.monthId).collection("members")
+                    for (member in activeMonthMembers) {
+                        if (member.normalizedGroup == normalizedTarget) {
+                            batch.update(
+                                monthMembersRef.document(member.memberKey),
+                                mapOf(
+                                    "familyGroup" to fallbackGroup,
+                                    "updatedAt" to FieldValue.serverTimestamp(),
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, groupRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun transferMemberToGroup(
+        memberKey: String,
+        targetGroupId: String,
+        targetGroupAmountLkr: Long? = null,
+        updateActiveMonthAmount: Boolean = false,
+        activeMonth: PaymentMonth?,
+        activeMonthMembers: List<MemberPaymentStatus>,
+    ): Result<Unit> {
+        requireUserId()
+        val normalizedTarget = AtaPotifyConstants.normalizeFamilyGroup(targetGroupId)
+        val whitelistRef = db.collection("whitelist").document(memberKey)
+        val wlExists = try {
+            whitelistRef.get().await().exists()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+
+        val batch = db.batch()
+        if (wlExists) {
+            batch.update(
+                whitelistRef,
+                mapOf(
+                    "familyGroup" to normalizedTarget,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+            )
+        }
+
+        if (activeMonth != null && activeMonthMembers.any { it.memberKey == memberKey }) {
+            val memberRef = db.collection("payments").document(activeMonth.monthId)
+                .collection("members").document(memberKey)
+            val updates = mutableMapOf<String, Any>(
+                "familyGroup" to normalizedTarget,
+                "updatedAt" to FieldValue.serverTimestamp(),
+            )
+            if (updateActiveMonthAmount && targetGroupAmountLkr != null && targetGroupAmountLkr in 1..100_000) {
+                updates["amountLkr"] = targetGroupAmountLkr
+            }
+            batch.update(memberRef, updates)
+        }
+
+        return try {
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, whitelistRef.path, auth)
             Result.failure(e)
         }
     }
@@ -607,11 +885,13 @@ class PaymentRepository(
         displayLabel: String,
         amountLkr: Long,
         activeMembers: List<WhitelistMember>,
+        familyGroups: List<FamilyGroup> = emptyList(),
     ): Result<Unit> {
         val uid = requireUserId()
         require(monthId.matches(Regex("^[0-9]{4}-[0-9]{2}$"))) { "Invalid month ID format (YYYY-MM)" }
         require(amountLkr in 1..100_000) { "Amount must be between 1 and 100,000 LKR" }
 
+        val rateByGroup = familyGroups.associate { it.effectiveId to it.amountLkr }
         val allowedEmails = (activeMembers.map { AtaPotifyConstants.normalizeEmail(it.email) } +
             AtaPotifyConstants.ADMIN_EMAIL).distinct().take(25)
         val monthRef = db.collection("payments").document(monthId)
@@ -631,6 +911,7 @@ class PaymentRepository(
 
         for (member in activeMembers.take(25)) {
             val memberRef = monthRef.collection("members").document(member.memberKey)
+            val memberAmount = rateByGroup[member.normalizedGroup]?.takeIf { it in 1..100_000 } ?: amountLkr
             batch.set(
                 memberRef,
                 mapOf(
@@ -638,7 +919,7 @@ class PaymentRepository(
                     "memberEmail" to AtaPotifyConstants.normalizeEmail(member.email),
                     "displayName" to member.displayName.take(60),
                     "status" to AtaPotifyConstants.STATUS_PENDING,
-                    "amountLkr" to amountLkr,
+                    "amountLkr" to memberAmount,
                     "hasReceipt" to false,
                     "allowedEmails" to allowedEmails,
                     "reminderCount" to 0L,
@@ -1006,6 +1287,7 @@ class PaymentRepository(
         activeMonthMembers: List<MemberPaymentStatus>,
         spotifyEmail: String? = null,
         familyGroup: String? = null,
+        groupAmountLkr: Long? = null,
     ): Result<Unit> {
         requireUserId()
         val emailLower = AtaPotifyConstants.normalizeEmail(email)
@@ -1117,6 +1399,7 @@ class PaymentRepository(
                     )
                 )
             } else if (active) {
+                val effectiveAmount = groupAmountLkr?.takeIf { it in 1..100_000 } ?: activeMonth.amountLkr
                 batch.set(
                     monthRef.collection("members").document(memberKey),
                     mapOf(
@@ -1124,7 +1407,7 @@ class PaymentRepository(
                         "memberEmail" to emailLower,
                         "displayName" to cleanName,
                         "status" to AtaPotifyConstants.STATUS_PENDING,
-                        "amountLkr" to activeMonth.amountLkr,
+                        "amountLkr" to effectiveAmount,
                         "hasReceipt" to false,
                         "allowedEmails" to mergedMonthEmails,
                         "reminderCount" to 0L,
@@ -1205,6 +1488,7 @@ class PaymentRepository(
         activeMonth: PaymentMonth?,
         activeMonthMembers: List<MemberPaymentStatus>,
         familyGroup: String = AtaPotifyConstants.GROUP_1,
+        groupAmountLkr: Long? = null,
     ): Result<Unit> {
         requireUserId()
         val emailLower = AtaPotifyConstants.normalizeEmail(request.email)
@@ -1321,6 +1605,7 @@ class PaymentRepository(
                     )
                 )
             } else {
+                val effectiveAmount = groupAmountLkr?.takeIf { it in 1..100_000 } ?: activeMonth.amountLkr
                 batch.set(
                     monthRef.collection("members").document(memberKey),
                     mapOf(
@@ -1328,7 +1613,7 @@ class PaymentRepository(
                         "memberEmail" to emailLower,
                         "displayName" to cleanName,
                         "status" to AtaPotifyConstants.STATUS_PENDING,
-                        "amountLkr" to activeMonth.amountLkr,
+                        "amountLkr" to effectiveAmount,
                         "hasReceipt" to false,
                         "allowedEmails" to mergedMonthEmails,
                         "reminderCount" to 0L,

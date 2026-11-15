@@ -23,3 +23,12 @@ val AmberContainer = Color(0xFF33260E)
 
 val CoralPending = Color(0xFFF87171)
 val CoralContainer = Color(0xFF38171A)
+
+fun parseGroupColorHex(hex: String?, fallback: Color = SpotifyEmerald): Color {
+    val clean = hex?.trim().orEmpty()
+    if (!clean.startsWith("#") || clean.length != 7) return fallback
+    return runCatching {
+        val rgb = clean.substring(1).toLong(16)
+        Color(0xFF000000L or rgb)
+    }.getOrDefault(fallback)
+}

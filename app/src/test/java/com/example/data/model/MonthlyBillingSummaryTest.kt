@@ -239,6 +239,70 @@ class MonthlyBillingSummaryTest {
         org.junit.Assert.assertTrue(summaryText.contains("Nadun"))
         org.junit.Assert.assertTrue(summaryText.contains("Sachin"))
     }
+
+    @Test
+    fun familyGroupHelpersGenerateUniqueIdsAndFormatRenewalCadence() {
+        val existing = setOf("group_1", "group_2", "grp_uni_squad")
+        assertEquals("grp_office_crew", AtaPotifyConstants.generateGroupId("Office Crew!", existing))
+        assertEquals("grp_uni_squad_2", AtaPotifyConstants.generateGroupId("Uni Squad", existing))
+
+        assertEquals("Renews 1st monthly", AtaPotifyConstants.billingDaySummary("2026-11-01"))
+        assertEquals("Renews 2nd monthly", AtaPotifyConstants.billingDaySummary("2026-11-02"))
+        assertEquals("Renews 3rd monthly", AtaPotifyConstants.billingDaySummary("2026-11-03"))
+        assertEquals("Renews 11th monthly", AtaPotifyConstants.billingDaySummary("2026-11-11"))
+        assertEquals("Renews 22nd monthly", AtaPotifyConstants.billingDaySummary("2026-11-22"))
+        assertEquals("#A855F7", AtaPotifyConstants.normalizeHexColor(" #a855f7 "))
+    }
+
+    @Test
+    fun resolveEffectiveFamilyGroupsSupportsDefaultsAndCustomGroups() {
+        val customGroups = listOf(
+            FamilyGroup(
+                groupId = "grp_uni_squad",
+                name = "Uni Squad",
+                startDate = "2026-11-15",
+                amountLkr = 520L,
+                colorHex = "#A855F7",
+                maxSlots = 6L,
+            ),
+        )
+        val resolvedDefaults = resolveEffectiveFamilyGroups(
+            rawGroups = emptyList(),
+            defaultAmountLkr = 450L,
+            whitelist = listOf(WhitelistMember(memberKey = "u1", familyGroup = "grp_uni_squad")),
+        )
+        assertEquals(3, resolvedDefaults.size)
+        assertEquals("Family 1", resolvedDefaults[0].name)
+        assertEquals("Family 2", resolvedDefaults[1].name)
+
+        val resolvedWithCustom = resolveEffectiveFamilyGroups(
+            rawGroups = customGroups,
+            defaultAmountLkr = 450L,
+            whitelist = listOf(WhitelistMember(memberKey = "u1", familyGroup = "grp_uni_squad")),
+        )
+        assertEquals(1, resolvedWithCustom.size)
+        assertEquals("Uni Squad", resolvedWithCustom.first().name)
+
+        val month = PaymentMonth(monthId = "2026-11", displayLabel = "November 2026", amountLkr = 450L)
+        val summaryText = buildWhatsAppMonthlySummaryText(
+            month = month,
+            members = listOf(
+                MemberPaymentStatus(
+                    memberKey = "u1",
+                    displayName = "Kavindu",
+                    status = AtaPotifyConstants.STATUS_PAID,
+                    amountLkr = 520L,
+                    familyGroup = "grp_uni_squad",
+                ),
+            ),
+            stats = emptyList(),
+            planConfig = PlanConfig(),
+            groupFilter = "grp_uni_squad",
+            familyGroups = resolvedWithCustom,
+        )
+        org.junit.Assert.assertTrue(summaryText.contains("November 2026 (Uni Squad)"))
+        org.junit.Assert.assertTrue(summaryText.contains("Kavindu"))
+    }
 }
 
 

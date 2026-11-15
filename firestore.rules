@@ -41,6 +41,14 @@ service cloud.firestore {
       return monthId is string && monthId.size() == 7 && monthId.matches('^[0-9]{4}-[0-9]{2}$');
     }
 
+    function isValidColorHex(hex) {
+      return hex is string && hex.size() == 7 && hex.matches('^#[0-9A-Fa-f]{6}$');
+    }
+
+    function isValidStartDate(s) {
+      return s is string && (s == '' || (s.size() == 10 && s.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')));
+    }
+
     function isValidAllowedEmails(list) {
       return list is list &&
         list.size() >= 0 &&
@@ -85,9 +93,21 @@ service cloud.firestore {
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
         data.phone is string && data.phone.size() <= 24 &&
         (!('spotifyEmail' in data) || (data.spotifyEmail is string && data.spotifyEmail.size() <= 160)) &&
-        (!('familyGroup' in data) || data.familyGroup in ['group_1', 'group_2']) &&
+        (!('familyGroup' in data) || isValidId(data.familyGroup)) &&
         data.role == 'member' &&
         data.active is bool &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidFamilyGroup(data) {
+      return isValidId(data.groupId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 40 &&
+        isValidStartDate(data.startDate) &&
+        data.amountLkr is int && data.amountLkr >= 1 && data.amountLkr <= 100000 &&
+        isValidColorHex(data.colorHex) &&
+        data.maxSlots is int && data.maxSlots >= 1 && data.maxSlots <= 20 &&
+        data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 1000 &&
         data.createdAt is timestamp && data.createdAt <= request.time &&
         data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -106,7 +126,7 @@ service cloud.firestore {
       return isValidId(data.memberKey) &&
         data.memberEmail is string && data.memberEmail.size() >= 3 && data.memberEmail.size() <= 160 &&
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
-        (!('familyGroup' in data) || data.familyGroup in ['group_1', 'group_2']) &&
+        (!('familyGroup' in data) || isValidId(data.familyGroup)) &&
         data.status in ['pending', 'verifying', 'paid'] &&
         data.amountLkr is int && data.amountLkr >= 1 && data.amountLkr <= 100000 &&
         data.hasReceipt is bool &&
@@ -240,6 +260,30 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly(['planName', 'monthlyAmountLkr', 'currency', 'allowedEmails', 'bankName', 'bankAccountNumber', 'bankAccountHolder', 'bankBranch', 'pinnedAnnouncement', 'pinnedAnnouncements', 'updatedAt']);
 
       allow delete: if false;
+    }
+
+    match /family_groups/{groupId} {
+      allow get, list: if isAdmin() || (
+        isVerifiedSignedIn() &&
+        exists(/databases/$(database)/documents/plan_config/settings) &&
+        callerEmail() in get(/databases/$(database)/documents/plan_config/settings).data.allowedEmails
+      );
+
+      allow create: if isAdmin() &&
+        isValidId(groupId) &&
+        incoming().groupId == groupId &&
+        incoming().keys().hasAll(['groupId', 'name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['groupId', 'name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'createdAt', 'updatedAt']) &&
+        isValidFamilyGroup(incoming());
+
+      allow update: if isAdmin() &&
+        isValidId(groupId) &&
+        isValidFamilyGroup(incoming()) &&
+        incoming().groupId == existing().groupId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'startDate', 'amountLkr', 'colorHex', 'maxSlots', 'sortOrder', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(groupId);
     }
 
     match /whitelist/{memberKey} {

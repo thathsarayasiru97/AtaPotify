@@ -74,10 +74,12 @@ import androidx.compose.ui.window.Dialog
 import com.example.BuildConfig
 import com.example.R
 import com.example.data.model.AtaPotifyConstants
+import com.example.data.model.FamilyGroup
 import com.example.data.model.MemberPaymentStatus
 import com.example.data.model.PaymentMonth
 import com.example.data.model.UserProfile
 import com.example.data.model.WhitelistMember
+import com.example.data.model.resolveEffectiveFamilyGroups
 import com.example.data.repository.AccessResolution
 import com.example.data.service.AppUpdateService
 import com.example.data.service.GitHubAppRelease
@@ -117,6 +119,7 @@ import com.example.ui.components.AnimatedStreakBadge
 import com.example.ui.theme.EmeraldSoftText
 import com.example.ui.theme.MonoNumericLarge
 import com.example.ui.theme.MonoNumericSmall
+import com.example.ui.theme.parseGroupColorHex
 import com.example.ui.viewmodel.OverdueReminderCandidate
 import com.example.ui.viewmodel.ReceiptDialogState
 import java.text.SimpleDateFormat
@@ -655,12 +658,20 @@ fun StartNewMonthDialog(
     suggestedMonthId: String,
     defaultAmountLkr: Long,
     activeMemberCount: Int,
-    group1ActiveCount: Int = activeMemberCount,
-    group2ActiveCount: Int = 0,
+    familyGroups: List<FamilyGroup> = emptyList(),
+    activeCountByGroup: Map<String, Int> = emptyMap(),
     isBusy: Boolean,
     onConfirm: (monthId: String, label: String, amountLkr: Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val resolvedGroups = remember(familyGroups, defaultAmountLkr) {
+        resolveEffectiveFamilyGroups(familyGroups, defaultAmountLkr)
+    }
+    val breakdown = remember(resolvedGroups, activeCountByGroup) {
+        resolvedGroups.joinToString(", ") { grp ->
+            "${grp.name}: ${activeCountByGroup[grp.effectiveId] ?: 0}"
+        }
+    }
     var monthId by remember(suggestedMonthId) { mutableStateOf(suggestedMonthId) }
     var displayLabel by remember(suggestedMonthId) {
         mutableStateOf(AtaPotifyConstants.monthLabelFromId(suggestedMonthId))
@@ -674,7 +685,7 @@ fun StartNewMonthDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "Initializes $activeMemberCount active friend(s) (Family 1: $group1ActiveCount, Family 2: $group2ActiveCount) as Pending.",
+                    text = "Initializes $activeMemberCount active friend(s) ($breakdown) as Pending using each group's configured split rate.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                 )
@@ -729,14 +740,17 @@ fun StartNewMonthDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun WhitelistMemberDialog(
     editingMember: WhitelistMember?,
+    familyGroups: List<FamilyGroup> = emptyList(),
     defaultFamilyGroup: String = AtaPotifyConstants.GROUP_1,
     isBusy: Boolean,
     onSave: (email: String, name: String, phone: String, spotifyEmail: String, active: Boolean, familyGroup: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val resolvedGroups = remember(familyGroups) { resolveEffectiveFamilyGroups(familyGroups) }
     var email by remember(editingMember) { mutableStateOf(editingMember?.email.orEmpty()) }
     var name by remember(editingMember) { mutableStateOf(editingMember?.displayName.orEmpty()) }
     var phone by remember(editingMember) { mutableStateOf(editingMember?.phone.orEmpty()) }
@@ -791,35 +805,12 @@ fun WhitelistMemberDialog(
                     style = MaterialTheme.typography.labelMedium,
                     color = TextSecondary,
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = familyGroup == AtaPotifyConstants.GROUP_1,
-                        onClick = { familyGroup = AtaPotifyConstants.GROUP_1 },
-                        label = { Text("Family 1") },
-                        modifier = Modifier.weight(1f).testTag("whitelist_group_1_chip"),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = SurfaceElevated,
-                            labelColor = TextSecondary,
-                            selectedContainerColor = EmeraldContainer,
-                            selectedLabelColor = SpotifyEmerald,
-                        ),
-                    )
-                    FilterChip(
-                        selected = familyGroup == AtaPotifyConstants.GROUP_2,
-                        onClick = { familyGroup = AtaPotifyConstants.GROUP_2 },
-                        label = { Text("Family 2") },
-                        modifier = Modifier.weight(1f).testTag("whitelist_group_2_chip"),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = SurfaceElevated,
-                            labelColor = TextSecondary,
-                            selectedContainerColor = Color(0xFF0E2A38),
-                            selectedLabelColor = Color(0xFF38BDF8),
-                        ),
-                    )
-                }
+                DynamicFamilyGroupChips(
+                    familyGroups = resolvedGroups,
+                    selectedGroupId = familyGroup,
+                    onSelectGroup = { familyGroup = it },
+                    testTagPrefix = "whitelist_group",
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -896,10 +887,12 @@ fun SpotifySetupHintDialog(onDismiss: () -> Unit) {
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EditPaymentDialog(
     member: MemberPaymentStatus,
     monthLabel: String,
+    familyGroups: List<FamilyGroup> = emptyList(),
     initialFamilyGroup: String = member.normalizedGroup,
     isBusy: Boolean,
     onSave: (
@@ -912,6 +905,7 @@ fun EditPaymentDialog(
     ) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val resolvedGroups = remember(familyGroups) { resolveEffectiveFamilyGroups(familyGroups) }
     var displayName by remember(member) { mutableStateOf(member.displayName) }
     var status by remember(member) { mutableStateOf(member.status) }
     var amountText by remember(member) { mutableStateOf(member.amountLkr.toString()) }
@@ -962,35 +956,12 @@ fun EditPaymentDialog(
                     style = MaterialTheme.typography.labelMedium,
                     color = TextSecondary,
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = familyGroup == AtaPotifyConstants.GROUP_1,
-                        onClick = { familyGroup = AtaPotifyConstants.GROUP_1 },
-                        label = { Text("Family 1") },
-                        modifier = Modifier.weight(1f).testTag("edit_payment_group_1"),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = SurfaceElevated,
-                            labelColor = TextSecondary,
-                            selectedContainerColor = EmeraldContainer,
-                            selectedLabelColor = SpotifyEmerald,
-                        ),
-                    )
-                    FilterChip(
-                        selected = familyGroup == AtaPotifyConstants.GROUP_2,
-                        onClick = { familyGroup = AtaPotifyConstants.GROUP_2 },
-                        label = { Text("Family 2") },
-                        modifier = Modifier.weight(1f).testTag("edit_payment_group_2"),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = SurfaceElevated,
-                            labelColor = TextSecondary,
-                            selectedContainerColor = Color(0xFF0E2A38),
-                            selectedLabelColor = Color(0xFF38BDF8),
-                        ),
-                    )
-                }
+                DynamicFamilyGroupChips(
+                    familyGroups = resolvedGroups,
+                    selectedGroupId = familyGroup,
+                    onSelectGroup = { familyGroup = it },
+                    testTagPrefix = "edit_payment_group",
+                )
                 Text(
                     text = "Payment Status",
                     style = MaterialTheme.typography.labelMedium,
@@ -1092,11 +1063,15 @@ fun AddMemberToMonthDialog(
     month: PaymentMonth,
     existingMembers: List<MemberPaymentStatus>,
     whitelist: List<WhitelistMember>,
+    familyGroups: List<FamilyGroup> = emptyList(),
     adminDisplayName: String,
     isBusy: Boolean,
     onAdd: (email: String, displayName: String, amountLkr: Long, familyGroup: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val resolvedGroups = remember(familyGroups, month.amountLkr) {
+        resolveEffectiveFamilyGroups(familyGroups, month.amountLkr)
+    }
     val existingKeys = remember(existingMembers) {
         existingMembers.map { it.memberKey }.toSet()
     }
@@ -1115,8 +1090,14 @@ fun AddMemberToMonthDialog(
 
     var email by remember(month.monthId) { mutableStateOf("") }
     var displayName by remember(month.monthId) { mutableStateOf("") }
-    var amountText by remember(month.monthId) { mutableStateOf(month.amountLkr.toString()) }
-    var familyGroup by remember(month.monthId) { mutableStateOf(AtaPotifyConstants.GROUP_1) }
+    var familyGroup by remember(month.monthId) {
+        mutableStateOf(resolvedGroups.firstOrNull()?.effectiveId ?: AtaPotifyConstants.GROUP_1)
+    }
+    var hasCustomAmount by remember(month.monthId) { mutableStateOf(false) }
+    var amountText by remember(month.monthId) {
+        val initialRate = resolvedGroups.firstOrNull { it.effectiveId == familyGroup }?.amountLkr ?: month.amountLkr
+        mutableStateOf(initialRate.toString())
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1154,6 +1135,12 @@ fun AddMemberToMonthDialog(
                                     email = optEmail
                                     displayName = cleanName
                                     familyGroup = optGroup
+                                    if (!hasCustomAmount) {
+                                        val grpRate = resolvedGroups.firstOrNull { it.effectiveId == optGroup }?.amountLkr
+                                        if (grpRate != null) {
+                                            amountText = grpRate.toString()
+                                        }
+                                    }
                                 },
                                 label = { Text(optLabel) },
                                 colors = FilterChipDefaults.filterChipColors(
@@ -1187,7 +1174,10 @@ fun AddMemberToMonthDialog(
                 )
                 OutlinedTextField(
                     value = amountText,
-                    onValueChange = { amountText = it.filter { c -> c.isDigit() } },
+                    onValueChange = {
+                        hasCustomAmount = true
+                        amountText = it.filter { c -> c.isDigit() }
+                    },
                     label = { Text("Share Amount (LKR)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -1195,35 +1185,20 @@ fun AddMemberToMonthDialog(
                         .fillMaxWidth()
                         .testTag("add_to_month_amount_input"),
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = familyGroup == AtaPotifyConstants.GROUP_1,
-                        onClick = { familyGroup = AtaPotifyConstants.GROUP_1 },
-                        label = { Text("Family 1") },
-                        modifier = Modifier.weight(1f),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = SurfaceElevated,
-                            labelColor = TextSecondary,
-                            selectedContainerColor = EmeraldContainer,
-                            selectedLabelColor = SpotifyEmerald,
-                        ),
-                    )
-                    FilterChip(
-                        selected = familyGroup == AtaPotifyConstants.GROUP_2,
-                        onClick = { familyGroup = AtaPotifyConstants.GROUP_2 },
-                        label = { Text("Family 2") },
-                        modifier = Modifier.weight(1f),
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = SurfaceElevated,
-                            labelColor = TextSecondary,
-                            selectedContainerColor = Color(0xFF0E2A38),
-                            selectedLabelColor = Color(0xFF38BDF8),
-                        ),
-                    )
-                }
+                DynamicFamilyGroupChips(
+                    familyGroups = resolvedGroups,
+                    selectedGroupId = familyGroup,
+                    onSelectGroup = { newGroup ->
+                        familyGroup = newGroup
+                        if (!hasCustomAmount) {
+                            val grpRate = resolvedGroups.firstOrNull { it.effectiveId == newGroup }?.amountLkr
+                            if (grpRate != null) {
+                                amountText = grpRate.toString()
+                            }
+                        }
+                    },
+                    testTagPrefix = "add_to_month_group",
+                )
             }
         },
         confirmButton = {
@@ -1839,6 +1814,44 @@ private fun ReceiptMetaRow(
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
         )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DynamicFamilyGroupChips(
+    familyGroups: List<FamilyGroup>,
+    selectedGroupId: String,
+    onSelectGroup: (String) -> Unit,
+    testTagPrefix: String,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        familyGroups.forEach { grp ->
+            val accent = parseGroupColorHex(grp.colorHex, SpotifyEmerald)
+            FilterChip(
+                selected = selectedGroupId == grp.effectiveId,
+                onClick = { onSelectGroup(grp.effectiveId) },
+                leadingIcon = {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(accent),
+                    )
+                },
+                label = { Text(grp.name) },
+                modifier = Modifier.testTag("${testTagPrefix}_${grp.effectiveId}"),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = SurfaceElevated,
+                    labelColor = TextSecondary,
+                    selectedContainerColor = accent.copy(alpha = 0.2f),
+                    selectedLabelColor = accent,
+                ),
+            )
+        }
     }
 }
 
